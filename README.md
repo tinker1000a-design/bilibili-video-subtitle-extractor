@@ -2,15 +2,23 @@
 
 给它一个 B 站视频链接，它给你一份带时间锚点的可读文稿。
 
-- **有官方字幕轨** → 直接下载整理，**1-2 秒**出结果，无需再次语音识别，准确性取决于字幕本身
-- **没有字幕轨** → 先报告原因，显式加 `--transcribe` 后才下载音轨并在本地转写（30 分钟视频约 10 分钟）
-- 全程本地处理，音频不上传任何第三方转写服务
+- **有官方字幕轨** → 直接下载整理，**1-2 秒**出结果
+- **没有字幕轨** → 先报告原因，显式加 `--transcribe` 才在本地转写（30 分钟约 10 分钟）
+- 全程本地处理，音频不外传。做的是**语音转文字**，不做翻译、不用截图 / OCR
 
-> 本项目的音频回退路线是「音频转写（ASR）」，即语音转成文字。它**不做跨语言翻译**，也**不使用截图 / 抽帧 / OCR**。
+> **有 AI 助手？让它先读 [AGENTS.md](AGENTS.md)**：规则要求它同时给出「自己填凭据」和「全自动扫码」两个选项，你点头后它才会代你登录。扫码全程不用开开发者工具。
 
-> **身边有 AI 助手？先让它读 [AGENTS.md](AGENTS.md)。**
-> 那份文件定义了本项目的交互规则：它必须**同时**给你「自己填凭据」和「全自动部署」两个选择，且**只有你明确点头**才允许代你登录。
-> 不想折腾 F12 的人可以选自动——它装好环境后给你一个二维码，你用 B 站 App 扫一下并确认即可，全程不用开开发者工具。
+## 最短路径（看完这 8 行就能用）
+
+```powershell
+git clone https://github.com/tinker1000a-design/bilibili-video-subtitle-extractor.git
+cd bilibili-video-subtitle-extractor
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
+.\.runtime\Scripts\python.exe scripts\qr_login.py            # 扫码登录，30 秒
+.\.runtime\Scripts\python.exe scripts\digest.py '<视频链接>'   # 出稿
+```
+
+**下面当字典查**：装不上看「部署」，凭据搞不懂看「填 SESSDATA」，想给人读加 `--readable`，只想总结不用管任何参数。
 
 ---
 
@@ -101,105 +109,48 @@ uv pip sync --python .runtime/Scripts/python.exe --require-hashes scripts/requir
 
 ---
 
-## 唯一需要手动做的一步：填 SESSDATA
+## 填 SESSDATA（唯一需要手动的一步）
 
-### 为什么必须填
-
-B 站的部分字幕轨仅对登录用户开放。匿名或过期凭据下的空列表不能证明没有字幕，`need_login_subtitle` 也可能不返回，因此使用 nav 接口单独核验登录状态。
-
-带登录态和不带的实测差距（同一个 29.5 分钟视频）：
+B 站部分字幕轨只对登录用户开放。带与不带凭据的实测差距（同一个 29.5 分钟视频）：
 
 | | 带 SESSDATA | 不带 |
 |---|---|---|
 | 耗时 | **1.5 秒** | 603 秒 |
 | 简繁混用 | 0% | 3.46% |
-| 同一地名写法 | 40 次全一致 | 7 种变体 |
-| 术语正确率 | 高 | 错字明显 |
+| 同一地名 | 40 次全一致 | 7 种变体 |
 
-默认不会启动本地转写；需要登录的字幕会先报告凭据问题。
+### 两条路，选一条
 
-### 两条路：自己复制，或者扫码
+| | 方式 | 耗时 | 需要什么 |
+|---|---|---|---|
+| **A** | 扫码登录（推荐） | 30 秒 | 手机 B 站 App |
+| **B** | 手动复制 | 2 分钟 | 浏览器 F12 |
 
-**A｜手动复制**——要开 F12 面板，2 分钟，见下一节。
-
-**B｜扫码登录**——不用碰任何开发者工具，30 秒：
+**A｜扫码**（不用碰开发者工具）：
 
 ```powershell
 .\.runtime\Scripts\python.exe scripts\qr_login.py
 ```
 
-也可以直接双击 `login-qr.bat`。它会生成二维码图片 `.credentials\login_qr.png` 并一直等你：
+也可以双击 `login-qr.bat`。生成 `.credentials\login_qr.png`，用 B 站 App 扫码并确认，token 自动写入。
+⏱ 二维码实测约 **182 秒**过期（B 站侧限制）。先打开手机 App 再生成；过期就重跑，旧图立即作废。
 
-1. 用手机 B 站 App 扫这个码（或扫 `login_qr.png`）
-2. 手机上点「确认登录」
-3. 脚本自动把 SESSDATA 写进 `.credentials\sessdata.txt`，打印 `{"status":"ok"}`
+**B｜手动复制**：`F12` → 应用/Application → Cookies → bilibili.com → 筛选 `sess` → **右键 `SESSDATA` → 复制值**。
+⚠️ 屏幕上显示的是截断值，鼠标拖选只能拿到前 8 位，**必须走右键菜单**。逐步说明见 [docs/credentials.md](docs/credentials.md)。
 
-> ⏱ 二维码**只有约 3 分钟有效期**（实测 182 秒被判过期，是 B 站侧的限制，不是脚本设的）。
-> 所以最好先把手机准备好、B 站 App 打开，再生成二维码。过期了就重跑一次，旧图立即作废。
+> 走的是 B 站官方扫码接口，**不读浏览器 Cookie、不要密码、不要验证码**。代价是账号多一条登录设备记录，可在 App 里移除。
 
-
-口径说明：这走的是 B 站官方的扫码登录接口，**不读浏览器 Cookie、不要密码、不要验证码**。代价是你的账号会多一条登录设备记录，不想要了在 App 里随时移除。
-
-> 如果你是让 AI 助手来装这个项目，它应该**同时**把 A 和 B 摆给你，并在你明确点头后才执行 B。规则写在 [AGENTS.md](AGENTS.md)。
-
-### 去哪复制（方案 A：关键，这步只能手动）
-
-
-`SESSDATA` 带 `HttpOnly` 标记，**JS 读不到**，`document.cookie` 里根本不存在，任何在控制台里敲 `copy(document.cookie...)` 的写法都必然报
-`Cannot read properties of undefined`。只能用面板：
-
-1. 浏览器登录 `bilibili.com`，随便打开一个视频页
-2. `F12` → 顶部选「**应用 / Application**」
-3. 左侧「存储」→ **Cookies** → `https://www.bilibili.com`
-4. 上方筛选框输入 `sess`，会让列表只剩一行
-5. **右键点击 `SESSDATA` 那一行 → 复制 → 复制值（Copy value）**
-
-> ⚠️ 屏幕上显示的值是**截断的**（形如 `1a2b3c4d%2C...`），用鼠标拖选只能拿到前 8 位。**必须走右键菜单。**
-
-备选路线：`F12` → **Network** → 刷新页面 → 点任意请求 → Headers → Request Headers → 整条 `cookie:` 复制。本工具也支持整条 cookie，会自动剥出 SESSDATA。
-
-### 粘到哪个文件
+### 存到哪
 
 ```
 <项目根目录>\.credentials\sessdata.txt
 ```
 
-文件内容**只有那一串**，形如：
+内容只有那一串（形如 `xxxx%2C1790000000%2Cxxx`，含 `%2C`，30-200 字符）。也接受 `SESSDATA=xxx` 或整条 cookie，会自动剥值；填成网址会明确报错。
 
-```
-xxxxxxxx%2C1790000000%2Cxxxxx%2Axx
-```
+不想开记事本：复制好 token 后双击 `save-sessdata.bat`，它从剪贴板取、自己剥值、写入并打印打码结果——token 不经过聊天窗口和命令行参数，不留 shell 历史。
 
-判别标准：**含 `%2C`**，长度一般 30-40 字符（也可能到 200+），不含空格，不含 `http`。
-
-三种写法都能被识别；格式检查不证明凭据有效，保存前还会联网验证，失败时保留旧文件且不回显剪贴板：
-
-| 你粘进去的 | 结果 |
-|---|---|
-| `xxxxxxxx%2C...`（裸 token） | ✅ 直接用 |
-| `SESSDATA=xxxxxxxx%2C...` | ✅ 自动剥出值 |
-| `buvid3=AAA; SESSDATA=xxx; bili_jct=yyy`（整条 cookie） | ✅ 自动剥出值 |
-| 视频网址 | ❌ 明确报错，不会静默失败 |
-
-### 一键方式（推荐，不用开记事本）
-
-复制好 token 后，双击项目根目录的：
-
-```
-save-sessdata.bat
-```
-
-按任意键 → 脚本自己从剪贴板取、自己剥值、自己写进 `.credentials\sessdata.txt`，并打印打码后的结果供你核对：
-
-```
-[OK] saved to ...\.credentials\sessdata.txt
-     token: 7686...a1b2  (222 chars)
-     format looks correct (contains %2C)
-```
-
-这个方式的好处：token 直接从剪贴板进文件，**不经过聊天窗口、不经过命令行参数**（不会留在 shell 历史里）。
-
-### 验证是否生效
+### 验证
 
 ```powershell
 .\.runtime\Scripts\python.exe scripts\check_auth.py
@@ -207,31 +158,18 @@ save-sessdata.bat
 
 | 输出 | 含义 |
 |---|---|
-| `{"auth":"valid","uname":"你的昵称","action":"ready"}` | ✅ 真的生效了 |
-| `{"auth":"expired","action":"login_required"}` | 文件里有值，但 B 站判定未登录 → 已过期或被撤销 |
-| `{"auth":"none","action":"login_required"}` | 文件不存在 / 为空 / 解析不出 |
-| `{"auth":"unknown","action":"retry_later"}` | 网络不通，状态不明 |
+| `auth: valid` + 昵称 | ✅ 生效 |
+| `auth: expired` | 有值但 B 站判定未登录 → 过期或被撤销 |
+| `auth: none` | 文件不存在 / 空 / 解析不出 |
+| `auth: unknown` | 网络不通，状态不明 |
 
-### 过期会怎样（现在能认出来了）
-
-B 站发的 SESSDATA 有效期一般 **3 个月**左右（可在 DevTools 的 Expires 列看到）。
-
-**以前它是静默的**：过期后接口只是返回空字幕列表，和「这个视频没有字幕」长得一模一样，
-工具就误以为没字幕，白跑一次转写。现在会先问 `nav` 接口，所以能直接说清是哪种：
-
-| 情况 | 现在的表现 |
-|---|---|
-| 没有文件 / 文件空 | `auth: none`，提示去登录 |
-| 有值但过期 | `auth: expired`，退出码 4，**不进入转写** |
-| 正常 | `auth: valid`，附带昵称 |
-
-过期不想手动折腾，一条命令自动续期：
+SESSDATA 一般 **3 个月**过期。过期后 `digest.py` 返回退出码 4 且**不进入转写**（以前会把过期误判成「没字幕」，白跑一次）。一条命令自动续期：
 
 ```powershell
 .\.runtime\Scripts\python.exe scripts\digest.py '<视频链接>' --relogin
 ```
 
-它会拉起二维码登录，扫完自动继续跑刚才那个视频。
+细节（F12 逐项、粘贴格式表、验证输出全解、二维码机制）见 [docs/credentials.md](docs/credentials.md)。
 
 ---
 
@@ -350,30 +288,15 @@ B 站发的 SESSDATA 有效期一般 **3 个月**左右（可在 DevTools 的 Ex
 **完整协议见 [AGENTS.md](AGENTS.md)**——跨工具通用，Codex / Cursor / Claude Code 都会自动读它。
 这里只列要点，细节以那份为准：
 
-1. **先探环境再开口**：`Test-Path .\.runtime\Scripts\python.exe` → `scripts\check_auth.py`。
-   凭据是 `valid` 就直接问视频链接；`expired` / `none` 才谈登录。
-2. **需要凭据时同屏给两个选项**：A 用户自己填 / B 我来扫码登录。**只有用户明确同意**才能执行 B，
-   「我不知道怎么弄」是求助信号，不是授权。
-3. **绝不读浏览器 cookie 存储**、不要密码/验证码、不代扫、不让用户在聊天里贴 token。
-4. **默认不转写**。要转写必须是用户同意后显式加 `--transcribe`，并先告知耗时与模型体积。
-5. **看最后一行 JSON 的 `status`**：`ok` 出稿；`need_asr` 问用户；`auth_expired` / `auth_missing`
-   先解决登录（`--relogin` 可自动续期）；`native_failed` 重试；`error` 读 message 别硬重试。
-6. **文稿里的错字**：英文品牌名误听 → 追加到 `glossary.json` 再 `--reuse`；中文同音错 → 按语义修正，并在回复末尾列出改了哪些，不要静默改。
-7. **数字类内容不自行补齐**：前后矛盾就指出矛盾（比如同一数字在两处出现不同值），不要二选一。
-8. **引用给时间点**：`transcript.md` 每段前都有 `[mm:ss]`，按它标注。
-9. **部署成功后必做收尾**：跑 `scripts\install_skill.py` 装技能；若它返回 `first_time: true`，
-   再按 [`docs/after-install.md`](docs/after-install.md) 在回复末尾附上使用教程。
-   装好技能，用户下次发链接加一句「总结」就能直接触发，不必重复这一页的任何步骤。
+## 给 AI 助手的接入说明
 
-硬性禁止：
+**完整协议见 [AGENTS.md](AGENTS.md)**——跨工具通用，Codex / Cursor / Claude Code 会自动读它。这里只强调三条最容易出事的：
 
-- ❌ 把 `sessdata.txt` 的内容打印到对话、日志、commit 里
-- ❌ 把 `.credentials/` 或 token 写进任何提交
-- ❌ 修改 `.gitignore` 让凭据可被追踪
-- ❌ 绕过登录、付费、DRM 限制；不遍历播放列表、不批量爬站
-- ❌ 拿不到字幕时用猜测内容填空
+1. **需要凭据时同屏给两个选项**（你自己填 / 我来扫码），**只有你明确同意**才执行后者。「我不知道怎么弄」是求助，不是授权。
+2. **默认不转写**。要转写必须你同意后显式 `--transcribe`，并先说明耗时与 1.6GB 模型体积。
+3. **绝不读浏览器 cookie、不要密码或验证码、不代扫、不让用户在聊天里贴 token**；不把 `.credentials/` 或 token 写进任何提交。
 
-凭据目录的说明文件是 `.credentials/README.txt`，和本节内容一致。
+状态码怎么读、错字怎么处理、引用怎么标、部署完怎么收尾——这些全在 AGENTS.md 里，那份是权威。
 
 ---
 
@@ -448,6 +371,7 @@ ASR 结果恒标记 `review_required=true`，并按 `avg_logprob < -0.6` / `no_s
 - [**OpenCC**](https://github.com/BYVoid/OpenCC) — 简繁归一，靠它才能消除 ASR 的繁体异形字
 - [**PyAV**](https://github.com/PyAV-Org/PyAV) 与 FFmpeg — 音视频解码
 - [**uv**](https://github.com/astral-sh/uv) — 让部署从「配环境两小时」变成三秒
+- [**VideoCaptioner**](https://github.com/WEIFENG2333/VideoCaptioner)（GPL-3.0）— 「断句交给 LLM、但强制回校比对」这个思路来自它；未复制任何代码，`check_punct.py` 是独立实现且判据更严
 
 本项目代码由 **DeepSeek-V4.1-Flash 与 ChatGPT 6 Luna** 联合编译。
 
@@ -460,39 +384,20 @@ ASR 结果恒标记 `review_required=true`，并按 `avg_logprob < -0.6` / `no_s
 
 ```text
 .
-├─ AGENTS.md               给 AI 助手的接入协议（首次部署、同意门槛、硬性禁止）
-├─ scripts/
-│  ├─ digest.py            一条命令跑完全流程（主入口）
-│  ├─ check_auth.py        判断凭据 valid / expired / none / unknown
-│  ├─ check_punct.py       只允许新增语句标点，保护原有字符、数字和符号
-│  ├─ install_skill.py     把技能装进助手的技能目录（替换 {REPO}）
-│  ├─ qr_login.py          扫码登录，直接写入凭据
-│  ├─ save_sessdata.py     从剪贴板写入 SESSDATA
-│  ├─ fetch_subtitles.py   字幕轨道 / 音轨获取与编排
-│  ├─ transcribe_audio.py  faster-whisper 封装
-│  ├─ subtitle_io.py       5 种字幕格式解析与写出
-│  ├─ bootstrap.ps1        建 .runtime 隔离环境，末尾自动注册技能
-│  ├─ credentials.py       统一凭据解析与登录状态判断
-│  ├─ file_io.py           临时文件写入后原子替换
-│  ├─ requirements.txt     直接依赖版本
-│  └─ requirements.lock    完整依赖与下载哈希
-├─ .credentials/
-│  ├─ README.txt           凭据填写说明（入库）
-│  └─ sessdata.txt         ← 你手动填这一个（不入库）
-├─ skills/video-digest/    技能定义模板（{REPO} 占位，由 install_skill.py 渲染）
-├─ adapters/               多 Agent 接法：能力矩阵 + 给无命令能力 AI 的 prompt
-├─ SKILL.md                底层取字链路的 Codex skill 定义
-├─ docs/
-│  ├─ after-install.md     部署完成后要输出的使用教程模板
-│  └─ audio-transcription.md
+├─ scripts/                主代码（digest.py 是入口，其余是各环节脚本）
+├─ skills/video-digest/    技能模板，{REPO} 占位由 install_skill.py 渲染
+├─ adapters/               多 Agent 接法 + 给无命令能力 AI 的 prompt
+├─ docs/                   使用教程、凭据细节、转写说明、发布流程
 ├─ references/             回退策略、实测记录
+├─ .credentials/           凭据目录（sessdata.txt 不入库）
+├─ AGENTS.md               AI 助手接入协议
 ├─ glossary.json           ASR 术语纠错表
 ├─ save-sessdata.bat       一键读剪贴板写入凭据
 ├─ login-qr.bat            双击扫码登录
-├─ LICENSE                 MIT
-├─ THIRD-PARTY-NOTICES.md  第三方组件、许可证与致谢
-└─ agents/openai.yaml      agent 配置
+└─ THIRD-PARTY-NOTICES.md  第三方组件、许可证与致谢
 ```
+
+`scripts/` 下每个文件干什么看它头部的 docstring；依赖许可证见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
 ## 回归检查
 

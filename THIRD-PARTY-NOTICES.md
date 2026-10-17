@@ -69,7 +69,19 @@
 - `scripts/bootstrap.ps1` — 隔离环境初始化
 - `glossary.json`、`save-sessdata.bat`、文档与 skill 定义
 
-## 六、如果你发现遗漏
+## 六、设计参考（无代码衍生）
+
+以下项目**没有**被复制任何代码，本仓库也不包含它们的任何源码。列出是因为本项目的若干设计决策是从它们公开的做法里学来的，应当说明来源。
+
+| 项目 | 许可证 | 本项目的借鉴点 |
+|---|---|---|
+| [VideoCaptioner](https://github.com/WEIFENG2333/VideoCaptioner)（卡卡字幕助手，16.3k stars） | **GPL-3.0** | `videocaptioner/core/split/split_by_llm.py` 的工程思路：断句交给 LLM、prompt 要求「原文保持不变，仅插入 `<br>`」而不生成标点，再用 `difflib.SequenceMatcher.ratio()` 卡阈值（0.96）判是否篡改，不过就重做（`MAX_STEPS=2`），最终降级为规则分割 |
+| [biaodian](https://github.com/Jeffrey0117/biaodian) | 未声明 | 调研中文标点恢复方案时作为「纯规则路线」的对照实例，实测后未采用 |
+| [FunASR](https://github.com/modelscope/FunASR) `ct-punc` | Apache-2.0 | 作为「专用标点模型路线」的对照实例，因体积（291MB + torch）与口语场景 F1（论文 0.588）未采用 |
+
+**关于 GPL-3.0 的边界，需要说清楚**：本项目 `scripts/check_punct.py` 是用标准库独立实现的，判据也与 VideoCaptioner 不同——它用 0.96 相似度容忍区，本项目要求**剥掉标点后 100% 逐字相等**，不一致直接判失败并列第一处差异。两者不构成衍生作品关系，本仓库仍按 MIT 发布。如果你认为上述说明不准确，请在 Issues 提出。
+
+## 七、如果你发现遗漏
 
 本文件是基于「本仓库当前包含的代码与依赖」整理的。如果你发现某段代码实际来自其他项目、或某个依赖未被列出，请在仓库 Issues 中指出，我们会补上署名与许可证说明。
 
