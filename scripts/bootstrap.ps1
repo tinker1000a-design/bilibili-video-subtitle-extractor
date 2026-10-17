@@ -17,3 +17,14 @@ foreach ($exeName in @('ffmpeg', 'ffprobe')) {
     }
 }
 Write-Output "Ready: $pythonPath"
+
+# Register the skill so a bare video link + "总结" works in a fresh chat window.
+# Non-fatal: a machine without any known skill directory should still boot.
+try {
+    & $pythonPath (Join-Path $PSScriptRoot 'install_skill.py')
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Skill registration exited with $LASTEXITCODE. Run scripts\install_skill.py manually to see why."
+    }
+} catch {
+    Write-Warning "Skill registration skipped: $($_.Exception.Message)"
+}

@@ -103,6 +103,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 # ③ 自检：确认凭据真的生效了
 .\.runtime\Scripts\python.exe scripts\check_auth.py
 # 输出 "auth": "valid" 才算成功，并会带上 uname；"expired" 说明写进去的是废 token
+
+# ④ 收尾：装技能 + 输出使用教程（第 7 节，必做）
+.\.runtime\Scripts\python.exe scripts\install_skill.py
 ```
 
 ## 5. 硬性禁止
@@ -143,6 +146,48 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 
 状态码与用法详见 [README.md](README.md)。
 
-## 7. 如果你想把它装成常驻技能
+## 7. 部署成功之后：装技能 + 输出教程（必做，不是可选项）
 
-`skills/video-digest/SKILL.md` 是本项目自带的技能定义，把里面的 `{REPO}` 替换成本机克隆路径，放进你的助手技能目录即可。装好之后，用户发一条视频链接就能直接出文稿，不必再重复上面的任何步骤。
+**这一节是硬性要求。** 用户要的是「发一条链接就能自动总结」，而这只在技能装好之后才成立。
+部署成功那一刻做完这两步，他以后开新窗口才不用重新讲一遍。
+
+### 第一步：装技能（一条命令）
+
+```powershell
+.\.runtime\Scripts\python.exe scripts\install_skill.py
+```
+
+它读出 `skills/video-digest/SKILL.md`，把里面的 `{REPO}` 换成本机克隆路径，写进机器上**已经存在**
+的技能目录（WorkBuddy / Claude Code / Codex / Cursor），不会给没装的工具造空目录。输出一行 JSON：
+
+| 字段 | 含义 | 你该做什么 |
+|---|---|---|
+| `installed[].path` | 技能文件写到哪了 | 报给用户，让他知道装在哪 |
+| `first_time: true` | 本机第一次装 | **继续第二步，输出教程** |
+| `first_time: false` | 以前装过，这次只是更新 | 一句「技能已更新」就够，**不要贴教程** |
+| `fallback_used: true` | 没探测到任何技能目录，用了 WorkBuddy 的默认路径 | 提醒用户「如果你用的是别的助手，告诉我，我改指到它的目录」 |
+
+### 第二步：输出使用教程
+
+读 [`docs/after-install.md`](docs/after-install.md) 第 2 节，把那段模板**原样放在你回复的最后**，
+只替换里面的 `{{仓库路径}}`。不要改写格式，不要加标题层级。
+
+### 为什么必须用脚本，不能手抄路径
+
+技能里的命令全是绝对路径。手抄 `{REPO}` 有一半概率写错盘符或反斜杠，而**装错的技能比没装更糟**——
+它会在新窗口里静默失败，用户以为功能坏了。脚本还会在模板缺少 `{REPO}` 占位符时直接报错，
+避免装进去一份指向别人机器的死文件。
+
+### 装好之后是什么效果
+
+用户在新窗口发这些内容，助手会直接进入第 6 节的流程：
+
+```
+https://www.bilibili.com/video/BV1xxxxxxxxx  总结
+https://b23.tv/xxxxxx                        zj
+总结视频内容 + 一个链接
+这个视频讲什么 + 一个链接
+```
+
+他不需要提任何命令，也不需要记得这个仓库在哪。**这就是整套部署的终点，别省这一步。**
+

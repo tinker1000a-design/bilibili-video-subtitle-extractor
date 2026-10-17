@@ -66,6 +66,30 @@ uv pip install --python .runtime/Scripts/python.exe -r scripts/requirements.txt
 
 首次跑语音转写时，才会下载 Whisper 模型（turbo 约 1.6 GB）到 `.models`，之后复用缓存。
 
+### 第 4 步：装技能（让「发链接 + 总结」自动生效）
+
+```powershell
+.\.runtime\Scripts\python.exe scripts\install_skill.py
+```
+
+它读出 `skills/video-digest/SKILL.md`，把里面的 `{REPO}` 换成本机克隆路径，装进机器上**已经存在**的
+助手技能目录（WorkBuddy / Claude Code / Codex / Cursor），不会给没装的工具造空目录。
+
+装好之后的行为：
+
+| 你在新窗口里发 | 会不会自动走这套流程 |
+|---|---|
+| `https://www.bilibili.com/video/BVxxxx` + `总结` | ✅ |
+| `https://b23.tv/xxxx` + `zj` | ✅ |
+| `总结视频内容` / `总结视频` / `这个视频讲什么` / `提炼要点` | ✅ |
+| 只发一个链接，什么都不说 | ✅（按「总结」处理） |
+
+不用再提任何命令，也不用记得仓库在哪。
+
+输出里 `first_time: true` 表示本机第一次装 —— 这时 AI 助手会按
+[`docs/after-install.md`](docs/after-install.md) 在回复末尾附一段使用教程。
+`bootstrap.ps1` 末尾会顺手调一次这个脚本，所以正常部署时你不需要单独跑它。
+
 ---
 
 ## 唯一需要手动做的一步：填 SESSDATA
@@ -280,6 +304,9 @@ B 站发的 SESSDATA 有效期一般 **3 个月**左右（可在 DevTools 的 Ex
 6. **文稿里的错字**：英文品牌名误听 → 追加到 `glossary.json` 再 `--reuse`；中文同音错 → 按语义修正，并在回复末尾列出改了哪些，不要静默改。
 7. **数字类内容不自行补齐**：前后矛盾就指出矛盾（比如同一数字在两处出现不同值），不要二选一。
 8. **引用给时间点**：`transcript.md` 每段前都有 `[mm:ss]`，按它标注。
+9. **部署成功后必做收尾**：跑 `scripts\install_skill.py` 装技能；若它返回 `first_time: true`，
+   再按 [`docs/after-install.md`](docs/after-install.md) 在回复末尾附上使用教程。
+   装好技能，用户下次发链接加一句「总结」就能直接触发，不必重复这一页的任何步骤。
 
 硬性禁止：
 
@@ -376,23 +403,31 @@ ASR 结果恒标记 `review_required=true`，并按 `avg_logprob < -0.6` / `no_s
 
 ```text
 .
+├─ AGENTS.md               给 AI 助手的接入协议（首次部署、同意门槛、硬性禁止）
 ├─ scripts/
 │  ├─ digest.py            一条命令跑完全流程（主入口）
+│  ├─ check_auth.py        判断凭据 valid / expired / none / unknown
+│  ├─ install_skill.py     把技能装进助手的技能目录（替换 {REPO}）
+│  ├─ qr_login.py          扫码登录，直接写入凭据
 │  ├─ save_sessdata.py     从剪贴板写入 SESSDATA
 │  ├─ fetch_subtitles.py   字幕轨道 / 音轨获取与编排
 │  ├─ transcribe_audio.py  faster-whisper 封装
 │  ├─ subtitle_io.py       5 种字幕格式解析与写出
-│  ├─ bootstrap.ps1        建 .runtime 隔离环境
+│  ├─ bootstrap.ps1        建 .runtime 隔离环境，末尾自动注册技能
 │  └─ requirements.txt     精确固定版本
 ├─ .credentials/
 │  ├─ README.txt           凭据填写说明（入库）
 │  └─ sessdata.txt         ← 你手动填这一个（不入库）
+├─ skills/video-digest/    技能定义模板（{REPO} 占位，由 install_skill.py 渲染）
+├─ SKILL.md                底层取字链路的 Codex skill 定义
+├─ docs/
+│  ├─ after-install.md     部署完成后要输出的使用教程模板
+│  └─ audio-transcription.md
+├─ references/             回退策略、实测记录
 ├─ glossary.json           ASR 术语纠错表
 ├─ save-sessdata.bat       一键读剪贴板写入凭据
-├─ skills/video-digest/    可直接装进 AI 助手的 skill 定义
-├─ SKILL.md                底层取字链路的 Codex skill 定义
+├─ login-qr.bat            双击扫码登录
 ├─ LICENSE                 MIT
 ├─ THIRD-PARTY-NOTICES.md  第三方组件、许可证与致谢
-├─ docs/  references/      音频转写说明、回退策略、实测记录
 └─ agents/openai.yaml      agent 配置
 ```
