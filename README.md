@@ -300,6 +300,17 @@ ASR 结果恒标记 `review_required=true`，并按 `avg_logprob < -0.6` / `no_s
 
 依赖项目：[yt-dlp](https://github.com/yt-dlp/yt-dlp)、[faster-whisper](https://github.com/SYSTRAN/faster-whisper)、[CTranslate2](https://github.com/OpenNMT/CTranslate2)、[PyAV](https://github.com/PyAV-Org/PyAV)、[opencc](https://github.com/BYVoid/OpenCC)。各自适用其许可证。
 
+## 致谢
+
+这个工具站得比较高的地方全是别人的肩膀。完整清单（含许可证与义务）见 **[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)**，几个关键角色：
+
+- [**faster-whisper**](https://github.com/SYSTRAN/faster-whisper) 与 [**CTranslate2**](https://github.com/OpenNMT/CTranslate2) — 能在一台普通 CPU 电脑上把 30 分钟音频转成文字，靠的是它们
+- [**OpenAI Whisper**](https://github.com/openai/whisper) — `large-v3-turbo` 权重，MIT 许可
+- [**yt-dlp**](https://github.com/yt-dlp/yt-dlp) — 非 B 站站点的通用路线，本作品的最大功臣之一，且是公有领域
+- [**OpenCC**](https://github.com/BYVoid/OpenCC) — 简繁归一，靠它才能消除 ASR 的繁体异形字
+- [**PyAV**](https://github.com/PyAV-Org/PyAV) 与 FFmpeg — 音视频解码
+- [**uv**](https://github.com/astral-sh/uv) — 让部署从「配环境两小时」变成三秒
+
 ## 许可证
 
 本项目源码以 [MIT License](LICENSE) 发布，可自由使用、修改、分发、商用，保留版权声明即可。
@@ -325,6 +336,7 @@ ASR 结果恒标记 `review_required=true`，并按 `avg_logprob < -0.6` / `no_s
 ├─ skills/video-digest/    可直接装进 AI 助手的 skill 定义
 ├─ SKILL.md                底层取字链路的 Codex skill 定义
 ├─ LICENSE                 MIT
+├─ THIRD-PARTY-NOTICES.md  第三方组件、许可证与致谢
 ├─ docs/  references/      音频转写说明、回退策略、实测记录
 └─ agents/openai.yaml      agent 配置
 ```
