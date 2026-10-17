@@ -249,6 +249,9 @@ B 站发的 SESSDATA 有效期一般 **3 个月**左右（可在 DevTools 的 Ex
 # 给人读：段落缩到 70 字，另存 transcript-readable.md（不覆盖默认版）
 .\.runtime\Scripts\python.exe scripts\digest.py '<链接>' --readable
 
+# 校验「只插标点、没动原文」：剥掉标点后必须逐字相等，差一个字都不放过
+.\.runtime\Scripts\python.exe scripts\check_punct.py outputs\<BV号>\transcript.txt outputs\<BV号>\transcript-readable-punct.txt
+
 # 换模型：small 更快更差，turbo 默认
 .\.runtime\Scripts\python.exe scripts\digest.py '<链接>' --model small
 
@@ -442,6 +445,7 @@ ASR 结果恒标记 `review_required=true`，并按 `avg_logprob < -0.6` / `no_s
 ├─ scripts/
 │  ├─ digest.py            一条命令跑完全流程（主入口）
 │  ├─ check_auth.py        判断凭据 valid / expired / none / unknown
+│  ├─ check_punct.py       校验补标点后是否动了原文（剥标点逐字比对）
 │  ├─ install_skill.py     把技能装进助手的技能目录（替换 {REPO}）
 │  ├─ qr_login.py          扫码登录，直接写入凭据
 │  ├─ save_sessdata.py     从剪贴板写入 SESSDATA
