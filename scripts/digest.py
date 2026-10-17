@@ -83,8 +83,19 @@ def slug_for(url):
     return label + '_' + hashlib.sha256(url.encode('utf-8')).hexdigest()[:16]
 
 
+_METHOD_RANK = {'native-caption': 0, 'native-auto-caption': 1, 'speech-recognition': 2}
+
+
 def find_cache(out_root, slug, url):
-    """Reuse only matching metadata, including old BV-only output directories."""
+    """Reuse only matching metadata, including old BV-only output directories.
+
+    同一个视频可能同时躺着多份缓存：早年跑过 ASR 的父目录，后来拿到原生字幕的
+    probe 子目录。两者的 metadata 都指向同一个 URL、同一个分P，所以不能谁先命中
+    就用谁——那会让有原生字幕的视频被降级成 ASR 文本出稿。
+    按字幕来源质量排序，同质量再取较新的那份。current-result 指针存在时以指针为准
+    （那是上次真正产出成功的位置），指针缺失的老目录才靠质量排序兜底——否则老版本
+    留下的「根目录 ASR + probe 原生字幕」会让原生稿被静默换成 ASR 文本。
+    """
     directories = [out_root / slug]
     index_path = out_root / 'cache-index.json'
     if index_path.is_file():
@@ -96,18 +107,21 @@ def find_cache(out_root, slug, url):
             pass
     if re.fullmatch(r'BV[0-9A-Za-z]+_p[0-9]+', slug):
         directories.append(out_root / slug.rsplit('_p', 1)[0])
+
+    found = []
     for directory in directories:
-        candidates = [directory / 'probe', directory]
+        pointer = None
         current = directory / 'current-result.json'
         if current.is_file():
             try:
                 selected = json.loads(current.read_text(encoding='utf-8'))['result']
                 if selected not in ('.', 'probe'):
                     raise ValueError('invalid result location')
-                candidates = [directory / selected]
+                pointer = directory / selected
             except (OSError, ValueError, KeyError, TypeError):
                 raise RuntimeError('Invalid current-result pointer; fetch this video again') from None
-        for candidate in candidates:
+        locations = [pointer] if pointer is not None else [directory / 'probe', directory]
+        for candidate in locations:
             path = candidate / 'subtitles.json'
             if not path.is_file():
                 continue
@@ -120,12 +134,17 @@ def find_cache(out_root, slug, url):
                 if meta.get('part') is not None and re.fullmatch(r'BV[0-9A-Za-z]+_p[0-9]+', slug):
                     if int(meta['part']) != int(slug.rsplit('_p', 1)[1]):
                         continue
-                if not isinstance(data['cues'], list):
+                if not isinstance(data['cues'], list) or not data['cues']:
                     continue
-                return candidate
+                rank = _METHOD_RANK.get(meta.get('method'), 3)
+                found.append((rank, -path.stat().st_mtime, str(candidate), candidate))
             except (OSError, ValueError, KeyError, TypeError):
                 continue
-    raise RuntimeError('No matching subtitle cache for this video/part; fetch it without --reuse first')
+
+    if not found:
+        raise RuntimeError('No matching subtitle cache for this video/part; fetch it without --reuse first')
+    found.sort(key=lambda item: item[:3])
+    return found[0][3]
 
 
 def select_cache(out_root, out_dir, result_out, metadata):

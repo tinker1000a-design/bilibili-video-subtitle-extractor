@@ -60,6 +60,42 @@ class RegressionTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             digest.find_cache(self.root, digest.slug_for(VIDEO+'?p=2'), VIDEO+'?p=2')
 
+    def test_native_caption_wins_over_legacy_asr_cache(self):
+        """同一视频同时躺着老 ASR 缓存和新的原生字幕时，必须选原生字幕。
+
+        回归 case：--reuse 原先按 (目录, 目录/probe) 顺序遍历，命中即返回，
+        于是根目录那份早年跑出来的 ASR 结果永远压过 probe/ 下的原生字幕，
+        而且不报任何错——文稿被静默降级。
+        """
+        slug = digest.slug_for(VIDEO)
+        legacy = self.root / slug
+        write_result(legacy, [dict(start=1, end=3, text='那都不够AIM和艾满很强')],
+                     dict(url=VIDEO, title='Fixture', method='speech-recognition'))
+        native = self.cache(method='native-auto-caption', text='notebook a m和艾玛很强')
+        picked = digest.find_cache(self.root, slug, VIDEO)
+        self.assertEqual(picked, native)
+        self.assertEqual(json.loads((picked / 'subtitles.json').read_text())['metadata']['method'],
+                         'native-auto-caption')
+
+    def test_empty_cue_list_is_not_reused(self):
+        slug = digest.slug_for(VIDEO)
+        out = self.root / slug / 'probe'
+        out.mkdir(parents=True)
+        (out / 'subtitles.json').write_text(json.dumps(
+            {'metadata': {'url': VIDEO, 'method': 'native-caption'}, 'cues': []}))
+        with self.assertRaises(RuntimeError):
+            digest.find_cache(self.root, slug, VIDEO)
+
+    def test_same_quality_prefers_newer(self):
+        slug = digest.slug_for(VIDEO)
+        old = self.root / slug
+        write_result(old, [dict(start=1, end=3, text='old')],
+                     dict(url=VIDEO, method='native-caption'))
+        new = self.cache(text='new')
+        os.utime(old / 'subtitles.json', (1_000_000, 1_000_000))
+        os.utime(new / 'subtitles.json', (2_000_000, 2_000_000))
+        self.assertEqual(digest.find_cache(self.root, slug, VIDEO), new)
+
     def test_metadata_mismatch_is_rejected(self):
         out = self.cache()
         path = out / 'subtitles.json'
