@@ -57,6 +57,10 @@ Test-Path .\.credentials\sessdata.txt            # 是否已有凭据文件
 
 ## 4. 同意后的执行序列
 
+**生成二维码之前先问一句：「手机在手边吗？我现在生成，3 分钟内有效。」**
+这不是客套——二维码的寿命由 B 站决定，实测约 **182 秒**（2026-10-17 两次实测：182s / 182s
+被判过期），你等用户回完这句再生成，比生成完再等用户回消息成功率高得多。
+
 ```powershell
 # ① 部署（.runtime 不存在时才做）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
@@ -80,9 +84,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 | `qr` | 二维码已生成 | 展示 PNG，让用户扫 |
 | `waiting_scan` | 还没扫 | 等，别催 |
 | `waiting_confirm` | 扫了，手机没点确认 | 提醒用户「手机上还有一个确认按钮」 |
-| `refreshing` | 二维码过期，已自动换一张 | 重新展示新的 PNG |
 | `ok` | 已写入凭据 | 继续第 ③ 步 |
-| `expired` / `timeout` | 没扫成 | 回退到方案 A，**不要连续重试超过 2 次**，反复请求会触发风控 |
+| `expired` / `timeout` | 没扫成 | 先问用户「刚才是没看到，还是手机不在手边」，再决定重跑；**不要连续重试超过 2 次**，反复请求会触发风控 |
+
+脚本默认 `--retries 0`，即二维码过期就停下，不自动换码。这是刻意的：自动换码会**覆盖
+用户正在看的那张图片**，而他的查看器不会自动刷新，结果就是他一直盯着一个已经作废的码。
+要换码就重新跑一次，并明确告诉他「旧的作废了，看这张新的」。
 
 ```powershell
 # ③ 自检：确认凭据真的生效了

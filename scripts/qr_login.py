@@ -110,9 +110,14 @@ def wait_for_scan(session, key, timeout, interval):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--out', default=str(DEST), help='where to write the token')
-    parser.add_argument('--timeout', type=int, default=300, help='seconds to wait for the scan')
+    parser.add_argument('--timeout', type=int, default=300,
+                        help='hard upper bound in seconds; note bilibili itself expires the '
+                             'code in about 180s, so this is rarely reached')
     parser.add_argument('--interval', type=float, default=2.0, help='poll interval in seconds')
-    parser.add_argument('--retries', type=int, default=1, help='how many times to refresh an expired code')
+    parser.add_argument('--retries', type=int, default=0,
+                        help='how many times to auto-refresh an expired code; 0 = stop and let '
+                             'the caller re-run, which avoids silently overwriting the QR image '
+                             'the user is still looking at')
     parser.add_argument('--open-image', action='store_true', help='open the QR image with the default viewer')
     args = parser.parse_args()
 
