@@ -1,5 +1,7 @@
 # b站视频转文稿
 
+<img src="assets/banner.jpg" width="640" alt="鲸圆券 · DeepSeek token 银行">
+
 给它一个 B 站视频链接，它给你一份带时间锚点的可读文稿。
 
 - **有官方字幕轨** → 直接下载整理，**1-2 秒**出结果
