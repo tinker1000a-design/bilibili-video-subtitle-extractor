@@ -1,0 +1,4 @@
+interface:
+  display_name: "视频字幕获取"
+  short_description: "从视频链接优先获取原生字幕，必要时只取音轨进行本地转写"
+  default_prompt: "使用 $video-subtitle-fetcher 获取这个视频链接的字幕内容。"
