@@ -1,0 +1,9 @@
+{
+  "_说明": "ASR 常见误听的术语修正表：键为错误写法、值为正确写法。长键优先匹配，大小写敏感。只收录高置信度的品牌名/专名，中文同音错交给人工判断，避免误替换。每次发现新误听加一条，下次运行自动生效。",
+
+  "Subatch": "SubBatch",
+  "Star Bay": "SubBatch",
+  "Notebook ALM": "NotebookLM",
+  "NotebookALM": "NotebookLM",
+  "Notebook L M": "NotebookLM"
+}

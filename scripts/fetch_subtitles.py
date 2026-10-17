@@ -1,6 +1,7 @@
 """Fetch native captions; otherwise download audio and optionally transcribe it."""
 import argparse
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -13,6 +14,18 @@ import requests
 from subtitle_io import read_captions, write_result
 
 UA = 'Mozilla/5.0'
+
+
+def load_sessdata(path):
+    """Read a SESSDATA token from a file: bare token, SESSDATA=..., or a full Cookie header."""
+    text = pathlib.Path(path).read_text(encoding='utf-8-sig')
+    match = re.search(r'SESSDATA\s*=\s*([^;\s"\']+)', text)
+    if match:
+        return match.group(1)
+    token = text.strip().strip('"\'')
+    if token and not any(ch in token for ch in '\r\n \t'):
+        return token
+    raise RuntimeError('No usable SESSDATA token found in the cookie file')
 
 
 def api(session, url, params):
@@ -73,7 +86,7 @@ def bilibili(args, session, work, out):
         raise RuntimeError(f'Part {part} does not exist')
     cid = page['cid']
     meta = dict(url=f'https://www.bilibili.com/video/{bvid}/?p={part}', title=view['title'], part=part,
-                duration=page['duration'], bvid=bvid, cid=cid)
+                duration=page['duration'], bvid=bvid, cid=cid, auth=getattr(args, 'auth', 'anonymous'))
     (work / 'video_metadata.json').write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
     player = api(session, 'https://api.bilibili.com/x/player/wbi/v2', {'bvid': bvid, 'cid': cid})
     tracks = player.get('subtitle', {}).get('subtitles', [])
@@ -164,6 +177,8 @@ def main():
     parser.add_argument('--transcribe', action='store_true', help='Automatically transcribe downloaded audio when no captions are accessible')
     parser.add_argument('--model', default='turbo')
     parser.add_argument('--language', default='auto')
+    parser.add_argument('--sessdata-file', default=None,
+                        help='File holding a Bilibili SESSDATA token to read login-only caption tracks')
     args = parser.parse_args()
     if args.native_only and args.transcribe:
         parser.error('--native-only and --transcribe cannot be combined')
@@ -173,6 +188,14 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     session = requests.Session()
     session.headers.update({'User-Agent': UA})
+    token = None
+    if args.sessdata_file:
+        token = load_sessdata(args.sessdata_file)
+    else:
+        token = os.environ.get('BILI_SESSDATA') or None
+    if token:
+        session.cookies.set('SESSDATA', token, domain='.bilibili.com')
+    args.auth = 'sessdata' if token else 'anonymous'
     parsed = urlparse(args.url)
     if parsed.hostname in ('b23.tv', 'www.b23.tv'):
         redirected = session.get(args.url, timeout=30)

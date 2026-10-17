@@ -24,3 +24,7 @@ subtitles*.txt
 subtitles*.json
 manifest.json
 acquisition.json
+# 凭据：整个目录只放行说明文件，token 本身永不入库
+.credentials/*
+!.credentials/README.txt
+!.credentials/.gitkeep
