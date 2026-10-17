@@ -18,7 +18,7 @@ Windows 10/11，PowerShell 可用。需要三样东西：
 
 | 依赖 | 检查命令 | 没有就装 |
 |---|---|---|
-| uv | `uv --version` | `powershell -c "irm https://astral.sh/uv/install.ps1 \| iex"` |
+| uv | `uv --version` | `winget install --id=astral-sh.uv -e` |
 | ffmpeg / ffprobe | `ffmpeg -version` | `winget install --id=Gyan.FFmpeg -e` |
 
 Python **不用自己装**。初始化脚本会用 uv 拉一个 3.12 到项目内的 `.runtime`，不碰系统 Python。
