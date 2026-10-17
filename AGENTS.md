@@ -144,6 +144,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 **续期一条命令**：`.\.runtime\Scripts\python.exe scripts\digest.py '<链接>' --relogin`
 凭据过期时它会自动拉起二维码登录，扫完继续跑（同一条命令，不用两次）。
 
+**要给用户自己看的文稿**：加 `--readable`。段落缩到 70 字、在话语标记处提前断。
+默认的 120 字长段是给 AI 读的，人看会闷。这个开关不改任何文字，只改分段。
+
 状态码与用法详见 [README.md](README.md)。
 
 ## 7. 部署成功之后：装技能 + 输出教程（必做，不是可选项）
@@ -158,7 +161,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 ```
 
 它读出 `skills/video-digest/SKILL.md`，把里面的 `{REPO}` 换成本机克隆路径，写进机器上**已经存在**
-的技能目录（WorkBuddy / Claude Code / Codex / Cursor），不会给没装的工具造空目录。输出一行 JSON：
+的技能目录（WorkBuddy / DeepSeek Harness / Claude Code / Codex），不会给没装的工具造空目录。
+输出一行 JSON：
 
 | 字段 | 含义 | 你该做什么 |
 |---|---|---|

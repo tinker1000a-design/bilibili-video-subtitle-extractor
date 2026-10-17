@@ -28,15 +28,21 @@ INSTALLED_NOTE = (
     '本技能已安装在 `{repo}`，下文命令里的路径都是绝对路径，直接照抄即可。'
 )
 
-# User-level skill directories of common assistants.
+# User-level skill directories, with documented support for this file layout
+# (`<name>/SKILL.md` + frontmatter `name`/`description`).
 # Only parents that already exist are used, so we never litter a machine
 # with directories for tools the user does not have.
+#
+# Agents without a skill directory (Cursor, opencode, plain Codex) still work:
+# they read AGENTS.md at the repo root. See adapters/README.md.
 CANDIDATES = [
     ('workbuddy', pathlib.Path.home() / '.workbuddy' / 'skills'),
+    ('deepseek-harness', pathlib.Path.home() / '.dsh' / 'skills'),
     ('claude-code', pathlib.Path.home() / '.claude' / 'skills'),
     ('codex', pathlib.Path.home() / '.codex' / 'skills'),
-    ('cursor', pathlib.Path.home() / '.cursor' / 'skills'),
-    ('opencode', pathlib.Path.home() / '.config' / 'opencode' / 'skill'),
+    # Shared location read by dsh at lower priority; skipped when dsh's own
+    # directory is present, so the same skill is not installed twice.
+    ('agents-shared', pathlib.Path.home() / '.agents' / 'skills'),
 ]
 # Used only when nothing was detected: this repo's primary host.
 FALLBACK_HOST = 'workbuddy'
@@ -62,6 +68,10 @@ def plan_targets(explicit: list[str] | None):
     if explicit:
         return [(p, pathlib.Path(p).expanduser()) for p in explicit], False
     found = [(name, path) for name, path in CANDIDATES if path.is_dir()]
+    # dsh reads ~/.agents/skills at lower priority; installing to both would
+    # leave two copies of the same skill on disk.
+    if any(name == 'deepseek-harness' for name, _ in found):
+        found = [(name, path) for name, path in found if name != 'agents-shared']
     if found:
         return found, False
     return [(FALLBACK_HOST, FALLBACK)], True

@@ -246,6 +246,9 @@ B 站发的 SESSDATA 有效期一般 **3 个月**左右（可在 DevTools 的 Ex
 # 已经有结果，只重生成文稿（改完 glossary.json 后用）
 .\.runtime\Scripts\python.exe scripts\digest.py '<链接>' --reuse
 
+# 给人读：段落缩到 70 字，另存 transcript-readable.md（不覆盖默认版）
+.\.runtime\Scripts\python.exe scripts\digest.py '<链接>' --readable
+
 # 换模型：small 更快更差，turbo 默认
 .\.runtime\Scripts\python.exe scripts\digest.py '<链接>' --model small
 
@@ -280,11 +283,43 @@ B 站发的 SESSDATA 有效期一般 **3 个月**左右（可在 DevTools 的 Ex
 |---|---|
 | `transcript.md` | **主产物**：标题 + 来源标记 + 分段正文（带 `[mm:ss]` 锚点） |
 | `transcript.txt` | 纯文本版，方便丢给别的工具 |
+| `transcript-readable.md` | 加 `--readable` 才生成：段落 70 字，给人读的版本，不覆盖上面两份 |
 | `probe/subtitles.srt` | SRT，可给播放器 |
 | `probe/subtitles.json` | 每段文字 + 时间 + 置信度 |
 | `probe/manifest.json` | 时长、来源方法、模型、耗时 |
 
 `method` 字段标明文字从哪来：`native-caption`（站点字幕）、`native-auto-caption`（站点自动字幕）、`speech-recognition`（本地 ASR）。
+
+### 分段是怎么切的，以及为什么没给无标点文稿加标点
+
+两条来源的形态完全不同，实测（同一 29.5 分钟视频）：
+
+| 来源 | 标点 | 分段依据 |
+|---|---|---|
+| 站点字幕轨 | **0 个**（B 站 AI 字幕不带标点） | 按字数累积：默认 120 字，`--readable` 70 字。段内是一长串无标点文字 |
+| 本地 ASR | 162 个句号 + 420 个逗号 | 攒够长度后**等句末标点再断**，84% 的段尾落在标点边界 |
+
+试过但行不通的路子：**用 cue 之间的时间空隙判断句子边界**。站点字幕轨的 cue 首尾相接，gap 中位数 0.00 秒、94% 的间隔就是 0，这个信号根本不存在。所以「按停顿断句」在这一类字幕上无效。
+
+没有做「自动给无标点文稿加标点」，理由是实测会造出错误句界：把 `诗意的语言模糊，但是却完善了世界观` 断成 `…模糊，但是` + `却完善了世界观`，两句都读得通、但都不是原话。**误标点比没标点更容易误导人**。要真正加上标点，得引入中文标点恢复模型（约 250MB + 额外依赖），会把「3 秒部署」变成「几分钟部署」，与项目定位不符。
+
+需要人读的时候用 `--readable`（更短的段 + 话语标记处提前断），或者自己在编辑器里顺手过一遍。
+
+---
+
+## 多 Agent 适配
+
+同一份技能文件能直接装进多个助手，因为它们读的是两类公共约定，而不是各自的私有格式：
+
+| 类型 | Agent | 怎么接 |
+|---|---|---|
+| 有技能目录 | WorkBuddy、DeepSeek Harness、Claude Code、Codex | `install_skill.py` 自动装（已覆盖） |
+| 只读 AGENTS.md | Cursor、opencode、Aider、Zed、任意终端 Agent | 仓库根 `AGENTS.md`，在仓库目录下工作即可 |
+| 不能执行命令 | ChatGPT 网页、豆包、扣子、Kimi 网页 | **拿不到字幕**，只能用 [adapters/transcript-summarizer.md](adapters/transcript-summarizer.md) 总结你贴进去的文稿 |
+
+细节和扩展路径见 [adapters/README.md](adapters/README.md)。
+
+**为什么不给每家写一个适配文件**：WorkBuddy / DSH / Claude Code 的 SKILL.md 格式本来就一样（frontmatter `name` + `description`，目录式布局），复制五份只会得到五个会互相漂移的副本。
 
 ---
 
@@ -419,6 +454,7 @@ ASR 结果恒标记 `review_required=true`，并按 `avg_logprob < -0.6` / `no_s
 │  ├─ README.txt           凭据填写说明（入库）
 │  └─ sessdata.txt         ← 你手动填这一个（不入库）
 ├─ skills/video-digest/    技能定义模板（{REPO} 占位，由 install_skill.py 渲染）
+├─ adapters/               多 Agent 接法：能力矩阵 + 给无命令能力 AI 的 prompt
 ├─ SKILL.md                底层取字链路的 Codex skill 定义
 ├─ docs/
 │  ├─ after-install.md     部署完成后要输出的使用教程模板

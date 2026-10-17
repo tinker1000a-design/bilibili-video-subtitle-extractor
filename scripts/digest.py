@@ -78,21 +78,117 @@ def clock(seconds):
     return f'{seconds // 60:02}:{seconds % 60:02}'
 
 
-def build_paragraphs(cues, target=120, glossary=None):
-    glossary = glossary or []
-    paragraphs, buf, start = [], [], None
-    size = 0
+SENTENCE_END = '。！？!?…'
+CLAUSE_END = '，、；：,;:'
+# 段落提前断开用的「话语标记」，按可靠度分两层。
+# 强标记几乎只出现在句首；弱标记（但是/然后/就是/所以…）在句中很常见——
+# 遇到无标点文稿时只用强标记，否则会把「诗意的语言模糊，但是却完善了世界观」
+# 从「但是」处切断，制造出错误的句界。
+STRONG_MARKERS = ('那么', '接下来', '首先', '其次', '再者', '总之', '因此',
+                  '另外', '换句话说', '总结一下')
+WEAK_MARKERS = ('但是', '然后', '其实', '就是', '所以', '不过', '而且', '最后', '你看', '对吧')
+DISCOURSE_MARKERS = STRONG_MARKERS + WEAK_MARKERS
+
+
+def _sentence_units(cues, glossary, limit):
+    """把 cue 展平成「句子」单元，一条 cue 含多个句子时按字数比例插值时间。
+
+    分段只允许发生在单元边界，所以段落永远不会断在句子中间。
+    """
+    units = []
     for cue in cues:
-        if start is None:
-            start = cue['start']
         text = apply_glossary(to_simplified(cue['text']), glossary)
+        if not text.strip():
+            continue
+        parts = [p for p in re.split(f'(?<=[{SENTENCE_END}])', text) if p.strip()] or [text]
+        # 没有标点的超长 cue（B 站 AI 字幕常见）先按上限硬切，避免单段爆掉
+        flat = []
+        for part in parts:
+            if len(part) > limit:
+                flat.extend(part[i:i + limit] for i in range(0, len(part), limit))
+            else:
+                flat.append(part)
+        span = max(0.0, float(cue.get('end') or cue['start']) - float(cue['start']))
+        total = sum(len(p) for p in flat) or 1
+        offset = 0
+        for part in flat:
+            units.append((round(float(cue['start']) + span * offset / total, 2), part))
+            offset += len(part)
+    return units
+
+
+def _has_punctuation(units):
+    """判断这份文稿有没有「标点体系」。
+
+    B 站 AI 字幕轨 0 标点（实测 846 段里一个都没有），ASR 则有（638 段里
+    440 段以逗号或句号结尾）。两者必须走不同的分段策略，否则前者会被拉长成
+    216 字的巨段。
+    """
+    if not units:
+        return False
+    hits = sum(1 for _, text in units
+               if text and text.rstrip()[-1] in SENTENCE_END + CLAUSE_END)
+    return hits >= max(3, len(units) * 0.2)
+
+
+def _join(parts):
+    """拼接段落文本，只在「英文/数字接英文/数字」处补空格，避免 One two three2019年 粘连。"""
+    out = ''
+    for part in parts:
+        if out and re.search(r'[A-Za-z0-9]$', out) and re.match(r'[A-Za-z0-9]', part):
+            out += ' '
+        out += part
+    return out
+
+
+def build_paragraphs(cues, target=120, glossary=None, max_chars=None, marker_min=None):
+    """按句子重组段落。
+
+    实测（2026-10-17，29.5 分钟样本）：
+      · B 站 AI 字幕轨：846 段、0 个标点，cue 首尾相接（gap 中位 0.00），
+        「用时间间隔判断句子边界」这条路走不通；
+      · 本地 ASR：638 段、162 个句末标点 + 420 个逗号，440/638 的 cue 以标点结尾，
+        所以 cue 边界本身就是可靠的句读边界。
+
+    策略分两套：
+      · 有标点 → 攒够长度后**等到句末标点再断**，实在等不到才退到逗号，最后才硬断；
+      · 无标点 → 按字数断，并在话语标记处提前断，让节奏不那么闷。
+    """
+    glossary = glossary or []
+    units = _sentence_units(cues, glossary, max(target, 40))
+    if not units:
+        return []
+    max_chars = max_chars or int(target * 1.8)
+    marker_min = marker_min if marker_min is not None else target * 0.5
+    punctuated = _has_punctuation(units)
+
+    paragraphs, buf, start, size = [], [], None, 0
+    for t, text in units:
+        if buf:
+            tail = buf[-1].rstrip()[-1:] if buf[-1].strip() else ''
+            if punctuated:
+                should = (
+                    (size >= target and tail in SENTENCE_END)       # 够长且句号收尾
+                    or (size >= target * 1.3 and tail in CLAUSE_END)  # 等不到句号，逗号也行
+                    or size + len(text) > max_chars                  # 兜底硬断
+                    or (size >= marker_min and text.startswith(DISCOURSE_MARKERS))
+                )
+            else:
+                # 无标点就没有句界证据，只认「几乎只在句首出现」的强标记
+                should = (
+                    size >= target
+                    or size + len(text) > max_chars
+                    or (size >= marker_min and text.startswith(STRONG_MARKERS))
+                )
+            if should:
+                paragraphs.append((start, _join(buf)))
+                buf, start, size = [], None, 0
+        if not buf:
+            start = t
         buf.append(text)
         size += len(text)
-        if size >= target:
-            paragraphs.append((start, ''.join(buf)))
-            buf, start, size = [], None, 0
     if buf:
-        paragraphs.append((start or 0, ''.join(buf)))
+        paragraphs.append((start or 0, _join(buf)))
     return paragraphs
 
 
@@ -109,6 +205,9 @@ def main():
                              'Without this flag the tool stops at need_asr and reports why')
     parser.add_argument('--no-asr', action='store_true',
                         help='kept for compatibility; not transcribing is now the default')
+    parser.add_argument('--readable', action='store_true',
+                        help='shorter paragraphs for human reading (70 chars instead of 120, '
+                             'breaks earlier at discourse markers). No effect on accuracy')
     parser.add_argument('--reuse', action='store_true',
                         help='rebuild outputs from an existing subtitles.json instead of fetching again')
     parser.add_argument('--relogin', action='store_true',
@@ -260,7 +359,12 @@ def main():
         print(json.dumps(dict(status='empty', title=meta.get('title')), ensure_ascii=False))
         return 3
 
-    paragraphs = build_paragraphs(cues, glossary=load_glossary())
+    paragraphs = build_paragraphs(
+        cues,
+        target=70 if args.readable else 120,
+        glossary=load_glossary(),
+        marker_min=25 if args.readable else None,
+    )
     title = (meta.get('title') or slug).strip()
     method = meta.get('method') or 'unknown'
     asr = method == 'speech-recognition'
@@ -281,14 +385,17 @@ def main():
         lines.append(f'**[{clock(start)}]** {text}')
         lines.append('')
 
-    md_path = out_dir / 'transcript.md'
-    txt_path = out_dir / 'transcript.txt'
+    # --readable 另存一份，免得把给 AI 读的长段版本覆盖掉
+    stem = 'transcript-readable' if args.readable else 'transcript'
+    md_path = out_dir / f'{stem}.md'
+    txt_path = out_dir / f'{stem}.txt'
     md_path.write_text('\n'.join(lines), encoding='utf-8')
     txt_path.write_text('\n\n'.join(apply_glossary(to_simplified(c['text']), load_glossary())
                                   for c in cues), encoding='utf-8')
 
     print(json.dumps(dict(status='ok', title=title, method=method,
                           paragraphs=len(paragraphs), chars=sum(len(c['text']) for c in cues),
+                          readable=args.readable,
                           simplified=CC is not None,
                           markdown=str(md_path), text=str(txt_path),
                           subtitles=str(result_out / 'subtitles.srt')), ensure_ascii=False))
