@@ -1,16 +1,44 @@
 # SESSDATA 获取与填写方法
 
+## 两条路，选一条
+
+### 路 B：扫码登录（推荐，不用开开发者工具）
+
+直接双击项目根目录下的：
+
+    login-qr.bat
+
+或者命令行：
+
+    .\.runtime\Scripts\python.exe scripts\qr_login.py --open-image
+
+然后：手机 B 站 App 扫屏幕上弹出的二维码 → 手机上点确认 → 脚本自动写入本目录的 sessdata.txt，
+打印 {"status":"ok"} 就完事。全程不需要 F12，也不需要复制任何东西。
+
+说明：走的是 B 站官方扫码登录接口，不读浏览器 Cookie、不要密码、不要验证码。
+代价是账号会多一条登录设备记录，不想要了在 App「登录设备管理」里移除即可。
+
+### 路 A：手动复制（想知道原理，或扫码失败时用）
+
 ## 这个文件在哪
-    E:\_ai_agent\video-subtitle-fetcher\.credentials\sessdata.txt
+
+    <项目根目录>\.credentials\sessdata.txt
+
+（就是本说明文件所在的目录）
 
 ## 填什么
+
 B 站登录 Cookie 里名为 SESSDATA 的那一项的值，形如：
+
     xxxxxxxx%2C1790000000%2Cxxxxx%2Axx
+
 特征：含 %2C，长度一般 30-40 字符，不含空格、不含 http。
 
 ## 怎么拿（只用面板法——SESSDATA 是 HttpOnly，JS 读不到）
+
 已实测：B 站的 SESSDATA 带 HttpOnly 标记，document.cookie 里根本不存在，
-所以任何 Console 里的 JS 写法都会报 Cannot read properties of undefined。这是浏览器的安全设计，不是脚本问题。
+所以任何 Console 里的 JS 写法都会报 Cannot read properties of undefined。
+这是浏览器的安全设计，不是脚本问题。
 
 正确做法：
 1. 浏览器登录 bilibili.com，随便打开一个视频页
@@ -24,20 +52,25 @@ B 站登录 Cookie 里名为 SESSDATA 的那一项的值，形如：
 本工具也支持整条 cookie（会自动剥出 SESSDATA）。
 
 ## 怎么填（二选一）
+
 方式 A（一键，推荐）：
-    双击 E:\_ai_agent\video-subtitle-fetcher\save-sessdata.bat
+
+    双击 <项目根目录>\save-sessdata.bat
     → 回车 → 脚本自己从剪贴板取 token 写入文件
 
 方式 B（手动）：
+
     右键 sessdata.txt → 打开方式 → 记事本
     粘贴 token → Ctrl+S 保存 → 关闭
     只放这一串，不要加引号、不要加说明文字、不要换行分段
 
 ## 怎么确认生效
+
 跑任意视频，输出第一行 JSON 里出现 "auth": "sessdata" 即成功；
 如果是 "anonymous"，说明文件为空或格式不对。
 
 ## 注意
+
 - 这串东西等于你的账号登录态，拿到它的人可以操作你的账号。不要发给任何人、不要提交到 git。
-- 有效期通常半个月到一个月，失效后会自动退化成匿名（auth 变 anonymous），重新复制一次即可。
-- 本目录已写入 .gitignore，不会被提交。
+- 有效期以 Cookie 的 Expires 为准（实测常见 3 个月左右，不是无限期）。失效后会自动退化成匿名（auth 变 anonymous），重新扫码或用面板复制一次即可。
+- 本目录已写入 .gitignore，不会被提交；只有本说明文件例外。

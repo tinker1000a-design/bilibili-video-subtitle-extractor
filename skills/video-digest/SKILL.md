@@ -46,9 +46,20 @@ B 站 AI 字幕轨可直接读取（`method: native-auto-caption`，`player/wbi/
 同一视频实测：有登录态 **1.5 秒**出稿且零错字；无登录态走 ASR **603 秒**且 3.46% 简繁混用、专名 7 种写法。
 所以：**发现 `auth` 为 `anonymous` 时，先提醒用户填 SESSDATA，不要直接开 ASR 干等 10 分钟。**
 
-告诉用户怎么填（这步必须他手动做，`SESSDATA` 是 HttpOnly，JS 读不到）：
-`F12` → 应用/Application → Cookies → `https://www.bilibili.com` → 筛 `sess` → 右键 SESSDATA → 复制值
-→ 粘到 `{REPO}\.credentials\sessdata.txt`，或双击 `{REPO}\save-sessdata.bat` 从剪贴板写入。
+### 需要凭据时：必须同时给两个选项
+
+不要把手动方案当成唯一出路。**同屏给出这两条**，让用户自己选：
+
+- **A｜自己填**：`F12` → 应用/Application → Cookies → `https://www.bilibili.com` → 筛 `sess` → 右键 SESSDATA → 复制值 → 粘到 `{REPO}\.credentials\sessdata.txt`，或双击 `{REPO}\save-sessdata.bat` 从剪贴板写入
+- **B｜扫码登录（我来做）**：跑 `& '{REPO}\.runtime\Scripts\python.exe' '{REPO}\scripts\qr_login.py'`，生成 `{REPO}\.credentials\login_qr.png`，让用户用手机 B 站 App 扫码并在手机上点确认；成功后自动写入凭据并打印 `{"status":"ok"}`
+
+**B 需要用户明确同意才能执行**（「可以 / 你来 / 自动 / 帮我弄」这类肯定答复）。
+「我不知道怎么弄」「太麻烦了」**不是同意**，那是求助信号——把 A 和 B 讲清楚，等他选。沉默、只发链接、换话题都不算同意。
+
+执行 B 之前先讲清三件事：首次会下载依赖（约 1 分钟；若走 ASR 还要下 1.6GB 模型）、账号会新增一条登录设备记录（可在 App 里移除）、凭据写入被 `.gitignore` 排除的 `.credentials\sessdata.txt`。
+
+`qr_login.py` 会阻塞等待扫码，操作顺序是：先读到 `{"status":"qr"}` 那一行 → 把 PNG 展示给用户 → 再等任务结束。
+`waiting_confirm` 表示用户扫了但没在手机上点确认，提醒他一下；`expired` 就重跑一次，**不要连续重试超过 2 次**。
 
 | status | 含义 | 你该做什么 |
 |---|---|---|
@@ -89,7 +100,9 @@ B 站 AI 字幕轨可直接读取（`method: native-auto-caption`，`player/wbi/
 
 ## 边界
 
-- 不读浏览器 Cookie、不绕过登录/付费/DRM。需要登录态时由用户自己填 `.credentials\sessdata.txt`
+- **不读浏览器 Cookie。** 不碰 Chrome / Edge / Firefox 的 Cookies 数据库，不用 DPAPI 解密，不用任何「自动提取 cookie」的库。需要登录态只有两条路：用户自己填，或用户明确同意后走 `qr_login.py` 扫码。理由不只是技术上 Chrome 127+ 的 App-Bound Encryption 会失败，更是因为读凭据存储属于越权行为
+- 不索要账号密码或短信验证码；不让用户在聊天里贴 token（贴了就提醒他这是登录态，建议退出所有设备重登）
+- 不绕过登录/付费/DRM；二维码必须用户本人扫，不得代扫或代确认
 - 只处理单个视频，不静默遍历播放列表；合集需逐个给链接
 - 拿不到字幕、也转写不出有效语音时，如实报告阻碍，不用猜的内容填空
 - 输出文件保存在 `{REPO}\outputs\<BV号>\`（`transcript.md` / `transcript.txt` / `probe\subtitles.srt`）

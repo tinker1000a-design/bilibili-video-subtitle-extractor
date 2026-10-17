@@ -6,3 +6,4 @@ ctranslate2==4.8.3
 onnxruntime==1.31.0
 numpy==2.5.4
 opencc-python-reimplemented==0.1.7
+segno==1.6.6
