@@ -311,6 +311,8 @@ ASR 结果恒标记 `review_required=true`，并按 `avg_logprob < -0.6` / `no_s
 - [**PyAV**](https://github.com/PyAV-Org/PyAV) 与 FFmpeg — 音视频解码
 - [**uv**](https://github.com/astral-sh/uv) — 让部署从「配环境两小时」变成三秒
 
+本项目自身的代码是在 AI 编程助手协助下从零编写的，没有复制其他同类项目的源码。
+
 ## 许可证
 
 本项目源码以 [MIT License](LICENSE) 发布，可自由使用、修改、分发、商用，保留版权声明即可。
