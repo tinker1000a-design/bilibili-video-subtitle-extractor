@@ -15,6 +15,9 @@ import json
 import pathlib
 import re
 import sys
+import hashlib
+import uuid
+from file_io import atomic_text
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -44,10 +47,6 @@ CANDIDATES = [
     # directory is present, so the same skill is not installed twice.
     ('agents-shared', pathlib.Path.home() / '.agents' / 'skills'),
 ]
-# Used only when nothing was detected: this repo's primary host.
-FALLBACK_HOST = 'workbuddy'
-FALLBACK = pathlib.Path.home() / '.workbuddy' / 'skills'
-
 
 def render() -> str:
     if not TEMPLATE.is_file():
@@ -74,17 +73,28 @@ def plan_targets(explicit: list[str] | None):
         found = [(name, path) for name, path in found if name != 'agents-shared']
     if found:
         return found, False
-    return [(FALLBACK_HOST, FALLBACK)], True
+    return [], False
 
 
-def install_one(name: str, parent: pathlib.Path, content: str, dry_run: bool):
+def install_one(name: str, parent: pathlib.Path, content: str, dry_run: bool, replace_existing=False):
     dest_dir = parent / SKILL_NAME
     dest = dest_dir / 'SKILL.md'
     entry = dict(host=name, path=str(dest))
     previous = None
+    marker = dest_dir / '.video-digest-install.json'
     if dest.is_file():
-        old = dest.read_text(encoding='utf-8', errors='replace')
-        if old == content:
+        old = dest.read_text(encoding='utf-8')
+        try:
+            owner = json.loads(marker.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            owner = {}
+        owned = (isinstance(owner, dict) and owner.get('repo') == str(REPO.resolve())
+                 and owner.get('sha256') == hashlib.sha256(old.encode('utf-8')).hexdigest())
+        if not owned and not replace_existing:
+            entry['action'] = 'conflict'
+            entry['hint'] = 'Existing skill is unowned, edited, or belongs to another clone; use --target and --replace-existing to replace it'
+            return entry
+        if old == content and owned:
             entry['action'] = 'unchanged'
             return entry
         previous = old
@@ -93,8 +103,12 @@ def install_one(name: str, parent: pathlib.Path, content: str, dry_run: bool):
         return entry
     dest_dir.mkdir(parents=True, exist_ok=True)
     if previous is not None:
-        (dest_dir / 'SKILL.md.bak').write_text(previous, encoding='utf-8')
-    dest.write_text(content, encoding='utf-8')
+        backup = dest_dir / ('SKILL.' + uuid.uuid4().hex + '.bak')
+        atomic_text(backup, previous)
+        entry['backup'] = str(backup)
+    atomic_text(dest, content)
+    atomic_text(marker, json.dumps(dict(repo=str(REPO.resolve()),
+                                      sha256=hashlib.sha256(content.encode('utf-8')).hexdigest())))
     entry['action'] = 'replaced' if previous is not None else 'created'
     return entry
 
@@ -105,7 +119,11 @@ def main() -> int:
                         help='skill directory to install into (repeatable); default: auto-detect')
     parser.add_argument('--dry-run', action='store_true', help='report what would happen, write nothing')
     parser.add_argument('--check', action='store_true', help='only report existing installs, write nothing')
+    parser.add_argument('--replace-existing', action='store_true',
+                        help='explicitly replace conflicting skills in --target directories, keeping unique backups')
     args = parser.parse_args()
+    if args.replace_existing and not args.target:
+        parser.error('--replace-existing requires an explicit --target')
 
     content = render()
 
@@ -124,8 +142,16 @@ def main() -> int:
                          ensure_ascii=False))
         return 0
 
-    targets, used_fallback = plan_targets(args.target)
-    results = [install_one(name, parent, content, args.dry_run) for name, parent in targets]
+    targets, _used_fallback = plan_targets(args.target)
+    if not targets:
+        print(json.dumps(dict(status='no_target', installed=[], first_time=False,
+                              hint='No skill directory found; specify --target for your assistant')))
+        return 1
+    preview = [install_one(name, parent, content, True, args.replace_existing) for name, parent in targets]
+    if any(r['action'] == 'conflict' for r in preview):
+        print(json.dumps(dict(status='conflict', installed=preview, first_time=False), ensure_ascii=False))
+        return 1
+    results = preview if args.dry_run else [install_one(name, parent, content, False, args.replace_existing) for name, parent in targets]
 
     reused = [r for r in results if r['action'] in ('unchanged', 'replaced', 'would_replace')]
     fresh = [r for r in results if r['action'] in ('created', 'would_create')]
@@ -142,9 +168,7 @@ def main() -> int:
         # Defined as "no host had it before": an existing install that merely
         # gets refreshed must not re-print the tutorial to a returning user.
         first_time=bool(fresh) and not reused and not args.dry_run,
-        fallback_used=used_fallback,
-        note=('no skill directory detected; created the WorkBuddy one'
-              if used_fallback else None),
+        fallback_used=False,
     ), ensure_ascii=False))
     return 0
 

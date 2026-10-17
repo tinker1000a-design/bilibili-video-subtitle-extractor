@@ -43,14 +43,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 成功会打印 `Ready: ...\.runtime\Scripts\python.exe`。这一步做三件事：
 
 1. 建 `.runtime`（uv + Python 3.12，**不污染系统环境**）
-2. 装 `scripts/requirements.txt` 里的依赖（约 4 秒）
+2. 按 `scripts/requirements.lock` 安装完整依赖并校验下载哈希（耗时取决于网络与缓存）
 3. 检查 ffmpeg 是否在 PATH（缺了只警告，原生字幕路线仍可用）
 
 如果 PowerShell 拦住脚本，手动等价执行：
 
 ```powershell
 uv venv --python 3.12 .runtime
-uv pip install --python .runtime/Scripts/python.exe -r scripts/requirements.txt
+uv pip sync --python .runtime/Scripts/python.exe --require-hashes scripts/requirements.lock
 ```
 
 ### 第 3 步：自检（不转写，只验环境）
@@ -61,8 +61,8 @@ uv pip install --python .runtime/Scripts/python.exe -r scripts/requirements.txt
 ```
 
 - `check_auth.py` 打印 `{"status":"ok",...}` 就说明环境正常（此时 `auth` 多半是 `none`，还没登录）
-- `digest.py` 打印 `{"status":"ok",...}` 或 `{"status":"need_asr",...}` 都算装好了
-- 打印 `{"status":"error",...}` 是网络或站点问题，不是安装问题
+- `digest.py` 的最后一行会区分成功、缺字幕、缺凭据或读取失败；未登录时通常是 `auth_missing`
+- `error` 需结合错误阶段判断，可能来自环境、网络或站点，不能一概归因
 
 首次跑语音转写时，才会下载 Whisper 模型（turbo 约 1.6 GB）到 `.models`，之后复用缓存。
 
@@ -73,7 +73,16 @@ uv pip install --python .runtime/Scripts/python.exe -r scripts/requirements.txt
 ```
 
 它读出 `skills/video-digest/SKILL.md`，把里面的 `{REPO}` 换成本机克隆路径，装进机器上**已经存在**的
-助手技能目录（WorkBuddy / Claude Code / Codex / Cursor），不会给没装的工具造空目录。
+助手技能目录（WorkBuddy / DeepSeek Harness / Claude Code / Codex / `.agents/skills`）。没有探测到目录时返回 `no_target`，需用 `--target` 明确指定，不会创建假定宿主的目录。
+
+安装器只更新归属于当前克隆且未被手改的副本。同名技能来自其他克隆、没有安装标记或已被修改时，返回 `conflict`，本次所有目标均不写入。先查看目标，再明确替换：
+
+```powershell
+.\.runtime\Scripts\python.exe scripts\install_skill.py --target 'D:\助手\skills' --dry-run
+.\.runtime\Scripts\python.exe scripts\install_skill.py --target 'D:\助手\skills' --replace-existing
+```
+
+替换前保留唯一命名的 `SKILL.<随机标识>.bak`，不会覆盖之前的备份。旧版本安装的无标记副本也需这一次明确迁移。
 
 装好之后的行为：
 
@@ -96,7 +105,7 @@ uv pip install --python .runtime/Scripts/python.exe -r scripts/requirements.txt
 
 ### 为什么必须填
 
-B 站的 AI 字幕轨**默认只对登录用户开放**。匿名请求会返回 `need_login_subtitle: true`、0 条轨道——不是视频没字幕，是你没登录。
+B 站的部分字幕轨仅对登录用户开放。匿名或过期凭据下的空列表不能证明没有字幕，`need_login_subtitle` 也可能不返回，因此使用 nav 接口单独核验登录状态。
 
 带登录态和不带的实测差距（同一个 29.5 分钟视频）：
 
@@ -107,7 +116,7 @@ B 站的 AI 字幕轨**默认只对登录用户开放**。匿名请求会返回 
 | 同一地名写法 | 40 次全一致 | 7 种变体 |
 | 术语正确率 | 高 | 错字明显 |
 
-所以：**这 30 秒你不填，后面每个视频都要多等 10 分钟，还多一堆错字。**
+默认不会启动本地转写；需要登录的字幕会先报告凭据问题。
 
 ### 两条路：自己复制，或者扫码
 
@@ -163,7 +172,7 @@ xxxxxxxx%2C1790000000%2Cxxxxx%2Axx
 
 判别标准：**含 `%2C`**，长度一般 30-40 字符（也可能到 200+），不含空格，不含 `http`。
 
-三种写法都能被识别，粘错格式也不会炸：
+三种写法都能被识别；格式检查不证明凭据有效，保存前还会联网验证，失败时保留旧文件且不回显剪贴板：
 
 | 你粘进去的 | 结果 |
 |---|---|
@@ -249,7 +258,7 @@ B 站发的 SESSDATA 有效期一般 **3 个月**左右（可在 DevTools 的 Ex
 # 给人读：段落缩到 70 字，另存 transcript-readable.md（不覆盖默认版）
 .\.runtime\Scripts\python.exe scripts\digest.py '<链接>' --readable
 
-# 校验「只插标点、没动原文」：剥掉标点后必须逐字相等，差一个字都不放过
+# 校验只插入允许的语句标点：原有字符、数字与符号必须保留
 .\.runtime\Scripts\python.exe scripts\check_punct.py outputs\<BV号>_p<分P号>\transcript.txt outputs\<BV号>_p<分P号>\transcript-readable-punct.txt
 
 # 换模型：small 更快更差，turbo 默认
@@ -264,12 +273,12 @@ B 站发的 SESSDATA 有效期一般 **3 个月**左右（可在 DevTools 的 Ex
 | `status` | 退出码 | 含义 | 该做什么 |
 |---|---|---|---|
 | `ok` | 0 | 出稿了 | 读 `markdown` 指向的文件 |
-| `need_asr` | 2 | 登录有效，但视频确实没有字幕轨 | 看 `eta_minutes`，问用户要不要加 `--transcribe` |
+| `need_asr` | 2 | 当前提取器未发现字幕候选 | 看 `eta_minutes`，问用户要不要加 `--transcribe` |
 | `auth_expired` | 4 | 凭据过期（nav 返回 -101） | 重新扫码，或加 `--relogin` 自动续期 |
 | `auth_missing` | 4 | 匿名，看不到登录专属轨道 | 先登录；这不等于视频没字幕 |
 | `auth_unverified` | 4 | nav 不通，状态不明 | 稍后重试，不要猜 |
 | `native_failed` | 5 | 有字幕轨但下载全失败 | 重试一次 |
-| `empty` | 3 | 拿到轨道但没文字 | 如实说明，不要编 |
+| `empty` | 3 | 字幕轨已读取，但解析后没有有效文字 | 如实说明，不自动转写 |
 | `error` | 1 | 失败 | 读 stderr 的 `message`，判断网络/凭据/风控，别反复重试 |
 
 ### 术语纠错表
@@ -281,6 +290,12 @@ B 站发的 SESSDATA 有效期一般 **3 个月**左右（可在 DevTools 的 Ex
 术语表仅用于 ASR 的单独修订版 `transcript-corrected.txt`，逐段改动记录在 `transcript-corrections.json`。没有替换时不生成这两份文件。原生字幕不应用术语表；`transcript.txt` 始终保留原始字幕正文，Markdown 仅做简繁转换和分段。
 
 分 P 视频按 BV＋分 P 号隔离。`--reuse` 对标准 URL／裸 BV 只读取本地缓存，不检查登录、不联网；旧版 BV 目录只有元数据匹配时才复用，缓存不匹配则报错。短链接首次解析仍需联网，离线复用时请使用标准 URL／裸 BV。
+
+成功获取后由 `current-result.json` 指定本次采用的字幕来源，避免旧 ASR 抢占新原生字幕；旧缓存没有该标记时优先原生 `probe/`。通用站点同时记录输入地址和规范地址，用 `cache-index.json` 支持两种地址离线复用。ASR 保留这些身份字段。
+
+三个入口统一使用「显式 `--sessdata-file` ＞ `BILI_SESSDATA` 环境变量 ＞ 默认凭据文件」的优先级。B 站凭据只用于 B 站任务，不影响其他站点。`--no-asr` 与 `--transcribe` 互斥，同时传入会报参数错误。
+
+`check_punct.py` 只允许新增白名单中的语句标点和空白，保留原有非空白字符，并保护数字与英文词边界。`-1.5%` 变成 `15%` 等修改会被拒绝。请输出纯文本换行，不要用 `<br>` 或字面量 `\\n` 替代；检查通过仍不证明断句语义正确。
 
 ### 输出文件
 
@@ -449,7 +464,7 @@ ASR 结果恒标记 `review_required=true`，并按 `avg_logprob < -0.6` / `no_s
 ├─ scripts/
 │  ├─ digest.py            一条命令跑完全流程（主入口）
 │  ├─ check_auth.py        判断凭据 valid / expired / none / unknown
-│  ├─ check_punct.py       校验补标点后是否动了原文（剥标点逐字比对）
+│  ├─ check_punct.py       只允许新增语句标点，保护原有字符、数字和符号
 │  ├─ install_skill.py     把技能装进助手的技能目录（替换 {REPO}）
 │  ├─ qr_login.py          扫码登录，直接写入凭据
 │  ├─ save_sessdata.py     从剪贴板写入 SESSDATA
@@ -457,7 +472,10 @@ ASR 结果恒标记 `review_required=true`，并按 `avg_logprob < -0.6` / `no_s
 │  ├─ transcribe_audio.py  faster-whisper 封装
 │  ├─ subtitle_io.py       5 种字幕格式解析与写出
 │  ├─ bootstrap.ps1        建 .runtime 隔离环境，末尾自动注册技能
-│  └─ requirements.txt     精确固定版本
+│  ├─ credentials.py       统一凭据解析与登录状态判断
+│  ├─ file_io.py           临时文件写入后原子替换
+│  ├─ requirements.txt     直接依赖版本
+│  └─ requirements.lock    完整依赖与下载哈希
 ├─ .credentials/
 │  ├─ README.txt           凭据填写说明（入库）
 │  └─ sessdata.txt         ← 你手动填这一个（不入库）
@@ -483,3 +501,5 @@ ASR 结果恒标记 `review_required=true`，并按 `avg_logprob < -0.6` / `no_s
 ```
 
 测试使用合成字幕和网络替身，不读取真实账号凭据，也不下载模型。
+
+GitHub Actions 在 Windows 和 Ubuntu 的 Python 3.12 上安装锁定依赖、检查导入并运行离线回归。发布步骤与人工验收范围见 [docs/releasing.md](docs/releasing.md)。

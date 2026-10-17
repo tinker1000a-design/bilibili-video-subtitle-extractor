@@ -6,7 +6,7 @@
 
 ---
 
-## 一、运行时依赖（随 `scripts/requirements.txt` 精确锁定版本）
+## 一、运行时依赖（完整版本与哈希见 `scripts/requirements.lock`）
 
 | 组件 | 锁定版本 | 许可证 | 在本项目中的作用 |
 |---|---|---|---|
@@ -18,6 +18,7 @@
 | [onnxruntime](https://github.com/microsoft/onnxruntime) | 1.31.0 | MIT | 运行 VAD（语音活动检测）模型 |
 | [NumPy](https://github.com/numpy/numpy) | 2.5.4 | BSD-3-Clause | 底层数值计算 |
 | [opencc-python-reimplemented](https://github.com/yichen0831/opencc-python) | 0.1.7 | Apache-2.0 | 繁体→简体归一（消除 ASR 简繁混用） |
+| [Segno](https://github.com/heuer/segno) | 1.6.6 | BSD-3-Clause | 本地二维码 PNG 生成，许可证已核对安装包内 LICENSE |
 | [tokenizers](https://github.com/huggingface/tokenizers) | 0.23.3 | Apache-2.0 | 间接依赖（Whisper 分词） |
 | [huggingface-hub](https://github.com/huggingface/huggingface_hub) | 2.2.0 | Apache-2.0 | 间接依赖（模型下载） |
 | [tqdm](https://github.com/tqdm/tqdm) | 4.70.1 | MPL-2.0 AND MIT | 间接依赖（进度条） |

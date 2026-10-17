@@ -127,7 +127,7 @@ description: 把视频链接变成可读文稿并分析内容。只要用户发�
 | status | 退出码 | 含义 | 你该做什么 |
 |---|---|---|---|
 | `ok` | 0 | 出稿了 | 读 `markdown` 路径的文件，进入分析 |
-| `need_asr` | 2 | 登录有效，但视频确实没有字幕轨（`reason: no_caption_track`） | 带 `eta_minutes`；问用户要不要加 `--transcribe`，**不要自己决定** |
+| `need_asr` | 2 | 当前提取器未发现字幕候选（`reason: no_caption_track`） | 带 `eta_minutes`；问用户要不要加 `--transcribe`，**不要自己决定** |
 | `auth_expired` | 4 | 凭据过期（nav -101） | 用 `--relogin` 续期，或按「两个选项」重新登录；**不要开转写** |
 | `auth_missing` | 4 | 匿名，看不到登录专属轨道 | 先登录。**这不等于视频没字幕**，别据此断言 |
 | `auth_unverified` | 4 | nav 不通，状态不明 | 稍后重试，不要猜 |
@@ -204,7 +204,7 @@ description: 把视频链接变成可读文稿并分析内容。只要用户发�
 1. 读 `{REPO}\outputs\<BV号>_p<分P号>\transcript.txt`（纯正文，无时间戳）。
 2. **只插标点和分段，一个字符都不改**。不改错别字、不补全省略、不调整语序、不合并重复。
    口语里的「就是说」「那个」照原样保留。
-3. 写到同目录 `transcript-readable-punct.txt`，然后**必须**跑校验：
+3. 写到同目录 `transcript-readable-punct.txt`，使用真实换行，不插入 HTML 标签；然后**必须**跑校验：
 
    ```powershell
    & '{REPO}\.runtime\Scripts\python.exe' '{REPO}\scripts\check_punct.py' `
@@ -212,9 +212,7 @@ description: 把视频链接变成可读文稿并分析内容。只要用户发�
        '{REPO}\outputs\<BV号>_p<分P号>\transcript-readable-punct.txt'
    ```
 
-4. 退出码 0 才算完成。退出码 1 时脚本会指出第一处差异（哪个字多写了、少了、改了），
-   按提示改回原文再跑一遍。**不要因为「只差一个字」就跳过**——那一个字的差别就足以让
-   引用变成假原话。
+4. 退出码 0 表示字符约束通过：原有非空白字符保留、只新增白名单语句标点，数字和英文词边界未变。正负号、小数点、百分比等不能增删改。退出码 1 时按原因改回原文再跑，不能跳过。字符检查通过仍不证明断句符合原意，正式引用前核对上下文与原音频。
 
 不要做的事：
 

@@ -7,9 +7,11 @@ or a full cookie header, and keeps only the token value.
 """
 import argparse
 import pathlib
-import re
 import subprocess
 import sys
+from credentials import extract_token
+from check_auth import check
+from file_io import atomic_text
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEST = ROOT / '.credentials' / 'sessdata.txt'
@@ -25,25 +27,21 @@ def read_clipboard():
 
 
 def extract(text):
-    match = re.search(r'SESSDATA\s*=\s*([^;\s"\']+)', text)
-    if match:
-        return match.group(1)
-    token = text.strip().strip('"\'')
-    if token and not any(ch in token for ch in '\r\n \t'):
-        return token
-    return None
+    try:
+        return extract_token(text)
+    except ValueError:
+        return None
 
 
 def mask(token):
-    return token[:4] + '...' + token[-4:] if len(token) > 12 else token
+    return '***'
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--text', default=None, help='use this text instead of the clipboard (for testing)')
-    args = parser.parse_args()
+    parser.parse_args()
 
-    raw = args.text if args.text is not None else read_clipboard()
+    raw = read_clipboard()
     if not raw.strip():
         print('[FAIL] clipboard is empty - copy the SESSDATA value first')
         return 1
@@ -51,15 +49,17 @@ def main():
     token = extract(raw)
     if not token:
         print('[FAIL] no SESSDATA found in the clipboard content')
-        print('       content preview: ' + raw.strip()[:80].replace('\n', ' '))
         return 1
 
     if 'http' in token.lower():
         print('[FAIL] that looks like a video URL, not a token')
         return 1
 
-    DEST.parent.mkdir(parents=True, exist_ok=True)
-    DEST.write_text(token, encoding='utf-8')
+    state, _ = check(token)
+    if state != 'valid':
+        print('[FAIL] login could not be verified; previous credential has been kept')
+        return 1
+    atomic_text(DEST, token, private=True)
 
     print('[OK] saved to ' + str(DEST))
     print('     token: ' + mask(token) + '  (' + str(len(token)) + ' chars)')

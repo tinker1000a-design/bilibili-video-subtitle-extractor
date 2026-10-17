@@ -2,6 +2,7 @@
 import contextlib
 import io
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -11,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
 import digest
 import fetch_subtitles as fetch
+import credentials
 from subtitle_io import read_captions, write_result
 
 VIDEO = 'https://www.bilibili.com/video/BV16vdHBPExG/'
@@ -21,6 +23,10 @@ class RegressionTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = pathlib.Path(self.temp.name)
+        self.addCleanup(patch.stopall)
+        patch.dict(os.environ, {}, clear=True).start()
+        patch.object(credentials, 'DEFAULT_SESSDATA', self.root/'missing-token').start()
+        patch.object(fetch.requests.sessions.Session, 'request', side_effect=AssertionError('unexpected network access')).start()
 
     def cache(self, url=VIDEO, method='native-caption', text='We visited Star Bay.'):
         out = self.root / digest.slug_for(url) / 'probe'

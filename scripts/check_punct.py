@@ -6,14 +6,14 @@
     python check_punct.py 原文.txt 补标点后.txt --json
 
 原理：
-    把两边的标点、空白、分段标记（<br> 等）全部剥掉，剩下的字母/数字/汉字
-    必须逐字相等。不相等就说明补标点的过程顺手改了词、补了字或漏了字，
-    这份文稿不能当原话引用。
+    保留原文全部非空白字符，只允许插入白名单内的语句标点。
+    数字、正负号、小数点、单位符号和英文词边界另作保护。
+    通过只说明字符约束满足；断句是否符合原意仍需人工核对。
 
 为什么需要它：
     LLM 做标点/断句时即使 prompt 写了「不增删改」，仍会有小概率漂移。
     VideoCaptioner 的做法就是拿 difflib 相似度卡 0.96 再重做。
-    这里用的是更严格的判据：剥标点后必须 100% 相等，差一个字都不行。
+    不允许删除或替换原有标点，也不允许添加数学符号改变数字含义。
 
 退出码：0 一致 / 1 不一致 / 2 用法错误
 """
@@ -23,25 +23,31 @@ import difflib
 import json
 import re
 import sys
-import unicodedata
 
 # 分段标记先整体剔除，否则 <br> 里的字母会被当成正文
 _LEFTOVER_SEGMENT = re.compile(r'<\s*/?\s*(br|p|hr)\s*/?\s*>|\\n|\|\|', re.IGNORECASE)
 
 
 def normalize(text):
-    """只保留字母、数字、汉字。标点/空白/分段标记全部丢弃。"""
-    text = _LEFTOVER_SEGMENT.sub('', text)
-    out = []
-    for ch in text:
-        if ch.isalnum():
-            out.append(ch)
-            continue
-        # 兼容 CJK 兼容区与全角字母
-        cat = unicodedata.category(ch)
-        if cat[0] in ('L', 'N'):
-            out.append(ch)
-    return ''.join(out)
+    """Keep existing punctuation, symbols and combining characters."""
+    return ''.join(ch for ch in text if not ch.isspace())
+
+
+INSERTABLE = frozenset('，。！？；：、…“”‘’（）《》【】「」『』,.!?;:\'"()[]')
+PROTECTED = re.compile(r'[+\-−]?\d+(?:[.,:/]\d+)*(?:[%％‰])?|[A-Za-z]+(?:[\'’][A-Za-z]+)*')
+
+
+def validate(original, revised):
+    a, b = normalize(original), normalize(revised)
+    if PROTECTED.findall(original) != PROTECTED.findall(revised):
+        return False, 'numeric_or_word_token_changed'
+    index = 0
+    for ch in b:
+        if index < len(a) and ch == a[index]:
+            index += 1
+        elif ch not in INSERTABLE:
+            return False, 'source_changed_or_disallowed_insertion'
+    return (True, None) if index == len(a) else (False, 'source_character_deleted')
 
 
 def punct_stats(text):
@@ -82,7 +88,7 @@ def first_diff(a, b, width=24):
 
 def main():
     ap = argparse.ArgumentParser(
-        description='校验补标点后的文稿是否忠实于原文（剥标点后必须逐字相等）')
+        description='只允许插入语句标点和空白；保留原有字符、数字与符号')
     ap.add_argument('original', help='原始文稿（无标点或带标点均可）')
     ap.add_argument('revised', help='补标点/断句后的文稿')
     ap.add_argument('--json', action='store_true', help='输出 JSON 便于程序解析')
@@ -99,7 +105,7 @@ def main():
         return 2
 
     a, b = normalize(orig), normalize(rev)
-    ok = a == b
+    ok, reason = validate(orig, rev)
     diff = None if ok else first_diff(a, b)
     report = {
         'ok': ok,
@@ -107,6 +113,7 @@ def main():
         'revised_chars': len(b),
         'punct': punct_stats(rev),
         'diff': diff,
+        'reason': reason,
     }
 
     if args.json:
@@ -117,13 +124,14 @@ def main():
         if not args.quiet:
             st = report['punct']
             added = sum(v for k, v in st.items() if k != '分段标记')
-            print(f'✓ 通过：剥掉标点后 {len(a)} 字与原文逐字一致')
+            print(f'✓ 通过：原文 {len(a)} 个非空白字符保留，数字与英文词未变')
+            print('  此检查不证明断句语义正确，引用前仍需人工核对')
             print(f'  补标点版共插入 {added} 个标点 / {st["分段标记"]} 处分段')
             if added == 0 and st['分段标记'] <= 1:
                 print('  提示：没有检测到新增标点或分段，可能压根没处理')
         return 0
 
-    print('✗ 不通过：剥掉标点后内容与原文不一致，不能当原话引用')
+    print('✗ 不通过：原有字符或受保护内容改变，或插入了不允许的符号')
     print(f'  原文 {len(a)} 字 → 补标点版 {len(b)} 字（差 {len(b) - len(a):+d}）')
     if diff:
         print(f'  第一处差异：{diff["kind"]}（原文第 {diff["orig_index"]} 字附近）')

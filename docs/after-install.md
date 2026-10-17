@@ -10,7 +10,7 @@
 ```
 
 它会读出 `skills/video-digest/SKILL.md`，把里面的 `{REPO}` 换成本机克隆路径，再写进机器上
-探测到的技能目录（WorkBuddy / Claude Code / Codex / Cursor 中已存在的那些）。
+探测到的技能目录（WorkBuddy / DeepSeek Harness / Claude Code / Codex / `.agents/skills` 中已存在的那些）。`no_target` 时需明确指定 `--target`；`conflict` 时报告冲突路径，不自动覆盖。
 
 输出一行 JSON，重点看两个字段：
 
@@ -36,13 +36,13 @@
     https://b23.tv/xxxxxx                       zj
   也认：总结视频 / 总结视频内容 / 这个视频讲什么 / 提炼要点
 
-我会依次做完：取字幕 → 简繁统一 → 纠术语 → 按意思分段 → 出带时间点的文稿 → 讲清内容。
+我会依次做完：取字幕 → 保留原稿 → 简繁统一展示与分段 → 出带时间点的文稿 → 讲清内容。ASR 的术语修订单独保存。
 
   有字幕       1～2 秒出结果
   登录过期     我会问你要不要扫码，扫完自动接着跑
   真没字幕     我会先说明，再问你要不要花时间做语音转写
 
-文稿在：{{仓库路径}}\outputs\<BV号>\transcript.md
+文稿在：{{仓库路径}}\outputs\<BV号>_p<分P号>\transcript.md
 
 想换模型、只探不转、重新生成，直接跟我说，不用背参数。
 ——

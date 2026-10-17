@@ -9,7 +9,7 @@ if (-not (Test-Path -LiteralPath $pythonPath)) {
     & uv venv --python 3.12 $runtimePath
     if ($LASTEXITCODE -ne 0) { throw 'Creating the Python runtime failed.' }
 }
-& uv pip install --python $pythonPath -r (Join-Path $PSScriptRoot 'requirements.txt')
+& uv pip sync --python $pythonPath --require-hashes (Join-Path $PSScriptRoot 'requirements.lock')
 if ($LASTEXITCODE -ne 0) { throw 'Installing subtitle dependencies failed.' }
 foreach ($exeName in @('ffmpeg', 'ffprobe')) {
     if (-not (Get-Command $exeName -ErrorAction SilentlyContinue)) {
