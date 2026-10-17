@@ -300,6 +300,11 @@ ASR 结果恒标记 `review_required=true`，并按 `avg_logprob < -0.6` / `no_s
 
 依赖项目：[yt-dlp](https://github.com/yt-dlp/yt-dlp)、[faster-whisper](https://github.com/SYSTRAN/faster-whisper)、[CTranslate2](https://github.com/OpenNMT/CTranslate2)、[PyAV](https://github.com/PyAV-Org/PyAV)、[opencc](https://github.com/BYVoid/OpenCC)。各自适用其许可证。
 
+## 许可证
+
+本项目源码以 [MIT License](LICENSE) 发布，可自由使用、修改、分发、商用，保留版权声明即可。
+注意：MIT 只覆盖**本项目源码**，不覆盖你转写出来的视频文稿——那部分的版权仍属于原视频作者。
+
 ## 目录结构
 
 ```text
@@ -319,6 +324,7 @@ ASR 结果恒标记 `review_required=true`，并按 `avg_logprob < -0.6` / `no_s
 ├─ save-sessdata.bat       一键读剪贴板写入凭据
 ├─ skills/video-digest/    可直接装进 AI 助手的 skill 定义
 ├─ SKILL.md                底层取字链路的 Codex skill 定义
+├─ LICENSE                 MIT
 ├─ docs/  references/      音频转写说明、回退策略、实测记录
 └─ agents/openai.yaml      agent 配置
 ```
