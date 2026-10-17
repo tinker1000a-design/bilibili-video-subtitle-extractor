@@ -16,6 +16,10 @@ ROOT = HERE.parent
 DEFAULT_SESSDATA = ROOT / '.credentials' / 'sessdata.txt'
 GLOSSARY = ROOT / 'glossary.json'
 
+sys.path.insert(0, str(HERE))
+from check_auth import check as check_token  # noqa: E402
+from fetch_subtitles import load_sessdata  # noqa: E402
+
 try:
     import opencc
     CC = opencc.OpenCC('t2s')
@@ -99,9 +103,16 @@ def main():
                         help='defaults to .credentials/sessdata.txt when that file is non-empty')
     parser.add_argument('--model', default='turbo')
     parser.add_argument('--language', default='zh')
-    parser.add_argument('--no-asr', action='store_true', help='stop when no native captions are available')
+    parser.add_argument('--transcribe', action='store_true',
+                        help='allow local ASR when no caption track is readable (downloads a '
+                             '1.6GB model on first use, ~10 min for a 30 min video). '
+                             'Without this flag the tool stops at need_asr and reports why')
+    parser.add_argument('--no-asr', action='store_true',
+                        help='kept for compatibility; not transcribing is now the default')
     parser.add_argument('--reuse', action='store_true',
                         help='rebuild outputs from an existing subtitles.json instead of fetching again')
+    parser.add_argument('--relogin', action='store_true',
+                        help='when the credential is expired, run the QR login flow and then continue')
     parser.add_argument('--out-root', default=str(ROOT / 'outputs'))
     parser.add_argument('--work-root', default=str(ROOT / 'work'))
     args = parser.parse_args()
@@ -119,13 +130,68 @@ def main():
     common = ['--model', args.model, '--language', args.language]
     if sessdata:
         common += ['--sessdata-file', sessdata]
-    else:
-        print('[hint] 未配置 SESSDATA（匿名模式）：多数字幕轨不可读，可能退回本地转写。'
-              f'\n       填法见 {ROOT / ".credentials" / "README.txt"} ，或双击仓库根目录的 save-sessdata.bat。',
-              file=sys.stderr, flush=True)
 
-    print(json.dumps(dict(status='probing', slug=slug, auth='sessdata' if sessdata else 'anonymous'),
+    # 先确认凭据到底是「没有」「过期」还是「可用」。
+    # player/wbi/v2 对过期凭据和无字幕视频返回完全一样的空结果，所以这一步不能省。
+    auth_state, auth_detail = 'none', None
+    if sessdata:
+        try:
+            token = load_sessdata(sessdata)
+        except Exception as exc:
+            token = None
+            auth_detail = {'message': str(exc)[:200]}
+        if token:
+            auth_state, auth_detail = check_token(token)
+
+    uname = auth_detail.get('uname') if isinstance(auth_detail, dict) else None
+    print(json.dumps(dict(status='probing', slug=slug, auth=auth_state, uname=uname),
                      ensure_ascii=False), flush=True)
+
+    if auth_state == 'expired' and not args.relogin:
+        print(json.dumps(dict(
+            status='auth_expired',
+            action='login_required',
+            hint='SESSDATA 存在但 B 站判定未登录（nav 返回 -101）。用过期凭据探测会让所有视频都看起来'
+                 '「没有字幕」，所以这里直接停下，不进入转写。重新登录：'
+                 r'.\.runtime\Scripts\python.exe scripts\qr_login.py'
+                 '（加 --relogin 可让本脚本自动接上这一步）',
+        ), ensure_ascii=False), flush=True)
+        return 4
+
+    if args.relogin and auth_state in ('expired', 'none'):
+        target = sessdata or str(DEFAULT_SESSDATA)
+        print(json.dumps(dict(status='relogin', reason='credential %s' % auth_state,
+                              hint='启动二维码登录，扫完自动继续'), ensure_ascii=False), flush=True)
+        rc = subprocess.call([sys.executable, str(HERE / 'qr_login.py'), '--out', target])
+        if rc != 0:
+            print(json.dumps(dict(status='auth_expired', action='login_required',
+                                  hint='二维码登录没有完成，凭据仍不可用。重跑或手动扫码后再试'),
+                             ensure_ascii=False), flush=True)
+            return 4
+        sessdata = target
+        if '--sessdata-file' not in common:
+            common += ['--sessdata-file', sessdata]
+        try:
+            token = load_sessdata(sessdata)
+            auth_state, auth_detail = check_token(token)
+        except Exception as exc:
+            auth_state, auth_detail = 'none', {'message': str(exc)[:200]}
+        uname = auth_detail.get('uname') if isinstance(auth_detail, dict) else None
+        print(json.dumps(dict(status='probing', slug=slug, auth=auth_state, uname=uname),
+                         ensure_ascii=False), flush=True)
+        if auth_state != 'valid':
+            print(json.dumps(dict(status='auth_expired', action='login_required',
+                                  hint='扫码完成后凭据仍不可用，请重试一次'),
+                             ensure_ascii=False), flush=True)
+            return 4
+
+    if auth_state == 'none':
+        print('[hint] 未配置有效 SESSDATA（匿名模式）：公开字幕轨仍可尝试，但登录专属轨道一律不可见。\n'
+              f'       登录方式：{ROOT / "login-qr.bat"}（扫码，推荐）或 {ROOT / ".credentials" / "README.txt"}',
+              file=sys.stderr, flush=True)
+    elif auth_state == 'unknown':
+        print('[warn] 无法确认凭据状态（nav 请求失败），继续按已配置凭据尝试。',
+              file=sys.stderr, flush=True)
 
     result_out = None
     payload = None
@@ -145,14 +211,39 @@ def main():
             return 1
         payload = probe
         result_out = out_dir / 'probe'
-        if probe.get('status') == 'no_native_captions':
+        probe_status = probe.get('status')
+
+        if probe_status in ('auth_expired', 'auth_missing', 'auth_unverified'):
+            # 这几种都不是「视频没有字幕」，而是「我们看不到字幕」，绝不能拿去触发转写
+            status, hint = {
+                'auth_expired': ('auth_expired', 'SESSDATA 已失效，重新扫码后再跑'),
+                'auth_missing': ('auth_missing', '匿名状态下看不到登录专属字幕轨，先登录再跑'),
+                'auth_unverified': ('auth_unverified', 'nav 请求失败，无法确认凭据状态，稍后重试'),
+            }[probe_status]
+            print(json.dumps(dict(status=status, action='login_required', hint=hint,
+                                  title=probe.get('title'),
+                                  tracks_seen=probe.get('native_tracks_seen')), ensure_ascii=False),
+                  flush=True)
+            return 4
+
+        if probe_status == 'native_failed':
+            print(json.dumps(dict(status='native_failed', action='retry',
+                                  hint='字幕轨存在但一条都没下载成功，先重试；不要直接转写',
+                                  tracks_seen=probe.get('native_tracks_seen'),
+                                  failures=probe.get('native_attempt_failures'),
+                                  title=probe.get('title')), ensure_ascii=False), flush=True)
+            return 5
+
+        if probe_status == 'no_native_captions':
             duration = float(probe.get('duration') or 0)
-            if args.no_asr:
-                print(json.dumps(dict(status='need_asr', duration=duration, auth=probe.get('auth'),
-                                      title=probe.get('title')), ensure_ascii=False))
+            eta = round(duration / 60 / 2.9, 1)
+            if not args.transcribe:
+                print(json.dumps(dict(status='need_asr', reason='no_caption_track', auth=auth_state,
+                                      duration=duration, eta_minutes=eta, title=probe.get('title'),
+                                      hint='登录有效且这个视频确实没有字幕轨。要转写需显式加 --transcribe，'
+                                           '首次会下载约 1.6GB 模型'), ensure_ascii=False), flush=True)
                 return 2
-            print(json.dumps(dict(status='need_asr', duration=duration,
-                                  eta_minutes=round(duration / 60 / 2.9, 1),
+            print(json.dumps(dict(status='need_asr', duration=duration, eta_minutes=eta,
                                   title=probe.get('title')), ensure_ascii=False), flush=True)
             code, payload, err = call('fetch_subtitles.py',
                                       [args.url, '--transcribe', '--work', str(work_root / slug / 'full'),

@@ -1,6 +1,6 @@
 ---
 name: video-digest
-description: 从视频链接自动提取字幕并分析内容。用户发来 B 站（或 yt-dlp 支持的站点）视频链接、并想了解这个视频讲了什么时使用。原生字幕优先，取不到时自动本地语音转写，然后输出可读文稿与内容分析。触发词：分析这个视频、这个视频讲什么、帮我看看这个视频、提取字幕、视频总结、视频笔记。
+description: 从视频链接自动提取字幕并分析内容。用户发来 B 站（或 yt-dlp 支持的站点）视频链接、并想了解这个视频讲了什么时使用。原生字幕优先（需要有效登录凭据），取不到时报告原因、经用户确认后才做本地语音转写，最后输出可读文稿与内容分析。触发词：分析这个视频、这个视频讲什么、帮我看看这个视频、提取字幕、视频总结、视频笔记。
 ---
 
 # 视频转文稿与内容分析
@@ -23,11 +23,16 @@ description: 从视频链接自动提取字幕并分析内容。用户发来 B �
 & '{REPO}\.runtime\Scripts\python.exe' '{REPO}\scripts\digest.py' '<视频链接>'
 ```
 
+有字幕就出稿；**没字幕会停下来报告原因，不会自动转写**（这是故意设计的，见下面的状态表）。
+
 常用变体：
 
 ```powershell
-# 只探有没有现成字幕，不转写（秒回）
-... digest.py '<链接>' --no-asr
+# 允许本地转写：用户同意后加这个参数（首次下 1.6GB 模型，30 分钟视频约 10 分钟）
+... digest.py '<链接>' --transcribe
+
+# 凭据过期时自动拉起二维码登录，扫完继续（一条命令续期）
+... digest.py '<链接>' --relogin
 
 # 换模型（small 更快更差，turbo 默认）
 ... digest.py '<链接>' --model small
@@ -39,12 +44,25 @@ description: 从视频链接自动提取字幕并分析内容。用户发来 B �
 ... digest.py '<链接>' --sessdata-file '路径'
 ```
 
-脚本逐行输出 JSON。**只看最后一行**，它的 `status` 决定下一步。
+## 凭据状态：先查再跑，别猜
 
-**登录态是质量的分水岭（2026-10-17 实测）**：`.credentials\sessdata.txt` 填好后，首行 JSON 的 `auth` 为 `sessdata`，
-B 站 AI 字幕轨可直接读取（`method: native-auto-caption`，`player/wbi/v2` 带登录态裸调可通，无需 wbi 签名）。
-同一视频实测：有登录态 **1.5 秒**出稿且零错字；无登录态走 ASR **603 秒**且 3.46% 简繁混用、专名 7 种写法。
-所以：**发现 `auth` 为 `anonymous` 时，先提醒用户填 SESSDATA，不要直接开 ASR 干等 10 分钟。**
+```powershell
+& '{REPO}\.runtime\Scripts\python.exe' '{REPO}\scripts\check_auth.py'
+```
+
+| auth | 含义 | 你该做什么 |
+|---|---|---|
+| `valid` | 可用，附带 `uname` | 直接跑，别提登录 |
+| `expired` | 文件有值但 B 站判定未登录（nav 返回 -101） | 走下面的扫码流程，或用 `--relogin` 自动续期 |
+| `none` | 没有 / 空 / 解析不出 | 走下面的两个选项 |
+| `unknown` | nav 不通 | 稍后重试，不要猜 |
+
+**为什么必须单独查**：`player/wbi/v2` 对「凭据过期」和「视频没字幕」返回**完全相同**的空结果
+（tracks=0、`need_login_subtitle` 不返回）。只看那个接口，过期就会被当成没字幕，然后白跑一次转写。
+`nav` 是唯一能分辨的信号源。实测：有效 code=0 isLogin=true；无效 code=-101。
+
+**登录态仍是质量分水岭**：同一 29.5 分钟视频，有登录态 1.5 秒出稿、零错字；匿名走 ASR 603 秒、
+3.46% 简繁混用、同一地名 7 种写法。
 
 ### 需要凭据时：必须同时给两个选项
 
@@ -66,13 +84,18 @@ B 站 AI 字幕轨可直接读取（`method: native-auto-caption`，`player/wbi/
 用户正在看的那张图，而他的查看器不会自动刷新。
 
 
-| status | 含义 | 你该做什么 |
-|---|---|---|
-| `ok` | 完成 | 读 `markdown` 路径的文件，进入分析 |
-| `need_asr` | 探测阶段判定要转写（此时命令仍在继续跑，除非加了 `--no-asr`） | 已带 `eta_minutes`，可以先告诉用户预计耗时 |
-| `need_asr` + `--no-asr` | 没有现成字幕 | 问用户要不要花时间转写 |
-| `empty` | 拿到轨道但没文字 | 如实说明，不要编 |
-| `error` | 失败 | 读 stderr 的 message，判断是网络、凭据还是风控，不要反复重试 |
+脚本逐行输出 JSON。**只看最后一行**，它的 `status` 和进程退出码决定下一步：
+
+| status | 退出码 | 含义 | 你该做什么 |
+|---|---|---|---|
+| `ok` | 0 | 出稿了 | 读 `markdown` 路径的文件，进入分析 |
+| `need_asr` | 2 | 登录有效，但视频确实没有字幕轨（`reason: no_caption_track`） | 带 `eta_minutes`；问用户要不要加 `--transcribe`，**不要自己决定** |
+| `auth_expired` | 4 | 凭据过期（nav -101） | 用 `--relogin` 续期，或按「两个选项」重新登录；**不要开转写** |
+| `auth_missing` | 4 | 匿名，看不到登录专属轨道 | 先登录。**这不等于视频没字幕**，别据此断言 |
+| `auth_unverified` | 4 | nav 不通，状态不明 | 稍后重试，不要猜 |
+| `native_failed` | 5 | 字幕轨存在但一条都没下载成功 | 重试一次；仍失败再说 |
+| `empty` | 3 | 拿到轨道但没文字 | 如实说明，不要编 |
+| `error` | 1 | 失败 | 读 stderr 的 message，判断是网络、凭据还是风控，不要反复重试 |
 
 `method` 字段是质量的分水岭，必须写进结论：
 - `native-caption` / `native-auto-caption`：站点字幕轨道，质量高，可当原文引用
@@ -117,5 +140,6 @@ B 站 AI 字幕轨可直接读取（`method: native-auto-caption`，`player/wbi/
 - 运行时与模型都在 `{REPO}` 下（`.runtime` 隔离环境，`.models` 模型缓存约 1.6G）
 - 首次或依赖缺失时执行 `{REPO}\scripts\bootstrap.ps1`（需要 uv；ffmpeg 只在走 ASR 时必需）
 - 速度为 CPU int8 下约 2.9 倍实时，30 分钟视频约 10 分钟转写；模型已缓存后不再下载
-- 原生字幕路径与视频长短无关，固定 1-2 秒；ASR 只在确实没有字幕轨时才启动
-- SESSDATA 有效期约 3 个月，失效表现为 `auth` 回到 `anonymous`，重新填 `.credentials\sessdata.txt` 即可
+- 原生字幕路径与视频长短无关，固定 1-2 秒；**ASR 默认不启动**，只在用户同意后加 `--transcribe`
+- SESSDATA 一般 3 个月有效。失效表现为 `auth` 变 `expired`（nav 返回 -101），
+  这时字幕轨会**看起来是空的**，必须用 `--relogin` 重新扫码，不要误判成"这个视频没字幕"

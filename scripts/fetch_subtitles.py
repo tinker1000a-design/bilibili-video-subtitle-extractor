@@ -14,6 +14,30 @@ import requests
 from subtitle_io import read_captions, write_result
 
 UA = 'Mozilla/5.0'
+NAV = 'https://api.bilibili.com/x/web-interface/nav'
+
+
+def login_state(session, has_token):
+    """Tell "no token" / "expired token" / "token works" apart.
+
+    This cannot be done from player/wbi/v2: an expired token and a video without
+    captions both return zero tracks with need_login_subtitle unset, so treating
+    that as "this video has no captions" is wrong. The nav endpoint answers the
+    question directly: code 0 + isLogin true means the token works, -101 means it
+    expired or is invalid.
+    """
+    if not has_token:
+        return 'none', None
+    try:
+        payload = session.get(NAV, timeout=(10, 20)).json()
+    except (requests.RequestException, ValueError):
+        return 'unknown', None
+    data = payload.get('data') or {}
+    if payload.get('code') == 0 and data.get('isLogin'):
+        return 'valid', data.get('uname')
+    if payload.get('code') == -101:
+        return 'expired', None
+    return 'unknown', None
 
 
 def load_sessdata(path):
@@ -86,7 +110,8 @@ def bilibili(args, session, work, out):
         raise RuntimeError(f'Part {part} does not exist')
     cid = page['cid']
     meta = dict(url=f'https://www.bilibili.com/video/{bvid}/?p={part}', title=view['title'], part=part,
-                duration=page['duration'], bvid=bvid, cid=cid, auth=getattr(args, 'auth', 'anonymous'))
+                duration=page['duration'], bvid=bvid, cid=cid,
+                auth=getattr(args, 'auth', 'none'), uname=getattr(args, 'uname', None))
     (work / 'video_metadata.json').write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
     player = api(session, 'https://api.bilibili.com/x/player/wbi/v2', {'bvid': bvid, 'cid': cid})
     tracks = player.get('subtitle', {}).get('subtitles', [])
@@ -105,6 +130,17 @@ def bilibili(args, session, work, out):
     meta['native_attempt_failures'] = failures
     meta['subtitle_login_required'] = bool(player.get('need_login_subtitle'))
     if args.native_only:
+        if tracks:
+            # 有轨却一条都没取到（否则上面已经 return 了）
+            return dict(meta, status='native_failed')
+        state = getattr(args, 'auth', 'none')
+        if state == 'expired':
+            return dict(meta, status='auth_expired')
+        if state == 'none':
+            # 匿名状态下看不到字幕轨，不能据此断言"这个视频没有字幕"
+            return dict(meta, status='auth_missing')
+        if state == 'unknown':
+            return dict(meta, status='auth_unverified')
         return dict(meta, status='no_native_captions')
     media = work / 'audio.m4a'
     play = api(session, 'https://api.bilibili.com/x/player/playurl', {'bvid': bvid, 'cid': cid, 'qn': 32, 'fnval': 16})
@@ -195,7 +231,7 @@ def main():
         token = os.environ.get('BILI_SESSDATA') or None
     if token:
         session.cookies.set('SESSDATA', token, domain='.bilibili.com')
-    args.auth = 'sessdata' if token else 'anonymous'
+    args.auth, args.uname = login_state(session, bool(token))
     parsed = urlparse(args.url)
     if parsed.hostname in ('b23.tv', 'www.b23.tv'):
         redirected = session.get(args.url, timeout=30)

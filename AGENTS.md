@@ -9,19 +9,27 @@
 
 ## 1. 你的第一个动作：探环境，不要张口就教
 
-先判断三件事，再决定说什么：
+先跑这两条，再决定说什么：
 
 ```powershell
-Test-Path .\.runtime\Scripts\python.exe          # 环境是否已部署
-Test-Path .\.credentials\sessdata.txt            # 是否已有凭据文件
-(Get-Item .\.credentials\sessdata.txt).Length    # 0 表示空，需要登录
+Test-Path .\.runtime\Scripts\python.exe            # 环境是否已部署
+.\.runtime\Scripts\python.exe scripts\check_auth.py  # 凭据是 valid / expired / none
 ```
 
-| 结果 | 你的反应 |
-|---|---|
-| 环境在 + 凭据非空 | 直接可用，问用户要处理哪个视频链接，**不要再提 cookie** |
-| 环境在 + 凭据为空 | 走第 2 节，给两个选项 |
-| 环境不在 | 走第 2 节，给两个选项（自动选项会连部署一起做） |
+`check_auth.py` 输出一行 JSON，看 `auth` 和 `action`：
+
+| auth | action | 含义 | 你的反应 |
+|---|---|---|---|
+| `valid` | `ready` | 凭据可用，附带 `uname` | 问用户要处理哪个视频，**不要提登录** |
+| `expired` | `login_required` | 文件里有值，但 B 站判定未登录（nav 返回 -101） | 走第 2 节选项 B 重新扫码。**不要假装它还能用** |
+| `none` | `login_required` | 文件不存在、为空或解析不出 | 走第 2 节给两个选项 |
+| `unknown` | `retry_later` | nav 请求失败，状态不明 | 稍后重试，不要猜 |
+
+**为什么必须单独查这一步**：`player/wbi/v2` 对「凭据过期」和「视频没字幕」返回**完全一样的空结果**
+（tracks=0、`need_login_subtitle` 不返回）。只看那个接口会把过期当成没字幕，然后白跑一次转写。
+`nav` 接口是唯一能分辨的信号源。
+
+如果 `.runtime` 不存在，直接跳到第 2 节的自动选项（它会连部署一起做）。
 
 ## 2. 两个选项必须同屏给出
 
@@ -93,8 +101,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 
 ```powershell
 # ③ 自检：确认凭据真的生效了
-.\.runtime\Scripts\python.exe scripts\digest.py '<任意视频链接>' --no-asr
-# 输出里出现 "auth": "sessdata" 才算成功；出现 "anonymous" 说明没写进去，查文件
+.\.runtime\Scripts\python.exe scripts\check_auth.py
+# 输出 "auth": "valid" 才算成功，并会带上 uname；"expired" 说明写进去的是废 token
 ```
 
 ## 5. 硬性禁止
@@ -116,7 +124,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 .\.runtime\Scripts\python.exe scripts\digest.py '<视频链接>'
 ```
 
-一条命令完成：探测字幕轨 → 有则直接取、无则转写 → 简繁统一 → 术语纠错 → 段落重组 → 输出 `outputs\<BV号>\transcript.md`（带 `[mm:ss]` 锚点）。
+一条命令：探测字幕轨 → 有则取、出稿 / 没有则**停下来报告原因** → 简繁统一 → 术语纠错 → 段落重组 → `outputs\<BV号>\transcript.md`（带 `[mm:ss]` 锚点）。
+
+**注意：默认不会自动转写。** 只有显式加 `--transcribe` 才会启动本地 ASR（首次下 1.6GB 模型）。
+这是刻意的——用户抱怨过「登录明明成功了，工具却执意去部署识别模型」。现在它必须先说清是哪种情况：
+
+| 退出码 | status | 含义 | 你该做什么 |
+|---|---|---|---|
+| 0 | `ok` | 出稿了 | 读 `markdown` 路径，进入分析 |
+| 2 | `need_asr` | 登录有效，但**这个视频确实没有字幕轨** | 把 `eta_minutes` 告诉用户，问他要不要加 `--transcribe` |
+| 4 | `auth_expired` / `auth_missing` / `auth_unverified` | **看不到**字幕，不等于没有 | 先解决登录（或加 `--relogin` 一条命令续期），不要开转写 |
+| 5 | `native_failed` | 字幕轨存在但下载失败 | 重试一次；仍失败再考虑转写 |
+| 3 | `empty` | 拿到轨道但没文字 | 如实说，不要编 |
+| 1 | `error` | 真出错 | 读 message，别反复重试 |
+
+**续期一条命令**：`.\.runtime\Scripts\python.exe scripts\digest.py '<链接>' --relogin`
+凭据过期时它会自动拉起二维码登录，扫完继续跑（同一条命令，不用两次）。
 
 状态码与用法详见 [README.md](README.md)。
 

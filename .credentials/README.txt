@@ -66,8 +66,14 @@ B 站登录 Cookie 里名为 SESSDATA 的那一项的值，形如：
 
 ## 怎么确认生效
 
-跑任意视频，输出第一行 JSON 里出现 "auth": "sessdata" 即成功；
-如果是 "anonymous"，说明文件为空或格式不对。
+    .\.runtime\Scripts\python.exe scripts\check_auth.py
+
+- {"auth": "valid", "uname": "你的昵称", "action": "ready"} → 成功
+- {"auth": "expired", "action": "login_required"} → 文件里有值，但 B 站判定未登录（已过期或被撤销）
+- {"auth": "none", "action": "login_required"} → 文件不存在 / 为空 / 解析不出
+
+为什么不能只看视频接口：player 接口对「凭据过期」和「视频没字幕」返回一模一样的结果，
+所以必须用 check_auth.py 单独确认。过期了直接双击 login-qr.bat 重新扫一次即可。
 
 ## 注意
 

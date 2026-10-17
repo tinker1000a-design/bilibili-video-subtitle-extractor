@@ -53,14 +53,16 @@ uv venv --python 3.12 .runtime
 uv pip install --python .runtime/Scripts/python.exe -r scripts/requirements.txt
 ```
 
-### 第 3 步：自检（不联网转写，只探字幕）
+### 第 3 步：自检（不转写，只验环境）
 
 ```powershell
-.\.runtime\Scripts\python.exe scripts\digest.py 'https://www.bilibili.com/video/BV16vdHBPExG/' --no-asr
+.\.runtime\Scripts\python.exe scripts\check_auth.py
+.\.runtime\Scripts\python.exe scripts\digest.py 'https://www.bilibili.com/video/BV16vdHBPExG/'
 ```
 
-看到 `{"status":"need_asr",...}` 或 `{"status":"ok",...}` 就说明装好了。
-看到 `{"status":"error",...}` 是网络或站点问题，不是安装问题。
+- `check_auth.py` 打印 `{"status":"ok",...}` 就说明环境正常（此时 `auth` 多半是 `none`，还没登录）
+- `digest.py` 打印 `{"status":"ok",...}` 或 `{"status":"need_asr",...}` 都算装好了
+- 打印 `{"status":"error",...}` 是网络或站点问题，不是安装问题
 
 首次跑语音转写时，才会下载 Whisper 模型（turbo 约 1.6 GB）到 `.models`，之后复用缓存。
 
@@ -166,40 +168,58 @@ save-sessdata.bat
 
 ### 验证是否生效
 
-跑任意视频，看输出里的 `auth` 字段：
-
 ```powershell
-.\.runtime\Scripts\python.exe scripts\digest.py '<视频链接>' --no-asr
+.\.runtime\Scripts\python.exe scripts\check_auth.py
 ```
 
-- `{"status":"probing", ..., "auth":"sessdata"}` → ✅ 生效
-- `{"status":"probing", ..., "auth":"anonymous"}` → ❌ 文件为空或格式不对
+| 输出 | 含义 |
+|---|---|
+| `{"auth":"valid","uname":"你的昵称","action":"ready"}` | ✅ 真的生效了 |
+| `{"auth":"expired","action":"login_required"}` | 文件里有值，但 B 站判定未登录 → 已过期或被撤销 |
+| `{"auth":"none","action":"login_required"}` | 文件不存在 / 为空 / 解析不出 |
+| `{"auth":"unknown","action":"retry_later"}` | 网络不通，状态不明 |
 
-未配置时脚本也会主动提示该去哪个文件填，不会让你猜。
+### 过期会怎样（现在能认出来了）
 
-### 失效是什么样
+B 站发的 SESSDATA 有效期一般 **3 个月**左右（可在 DevTools 的 Expires 列看到）。
 
-B 站发的 SESSDATA 有效期通常 **3 个月**（可在 DevTools 的 Expires 列直接看到）。失效不会报错，只会**静默退回匿名**：`auth` 变回 `anonymous`、又出现 `subtitle_login_required`、开始走 ASR 变慢。重新复制一次覆盖即可。
+**以前它是静默的**：过期后接口只是返回空字幕列表，和「这个视频没有字幕」长得一模一样，
+工具就误以为没字幕，白跑一次转写。现在会先问 `nav` 接口，所以能直接说清是哪种：
+
+| 情况 | 现在的表现 |
+|---|---|
+| 没有文件 / 文件空 | `auth: none`，提示去登录 |
+| 有值但过期 | `auth: expired`，退出码 4，**不进入转写** |
+| 正常 | `auth: valid`，附带昵称 |
+
+过期不想手动折腾，一条命令自动续期：
+
+```powershell
+.\.runtime\Scripts\python.exe scripts\digest.py '<视频链接>' --relogin
+```
+
+它会拉起二维码登录，扫完自动继续跑刚才那个视频。
 
 ---
 
 ## 日常用法
 
-一条命令，全自动：
-
 ```powershell
 .\.runtime\Scripts\python.exe scripts\digest.py '<视频链接>'
 ```
 
-它会自己判断：有字幕就取字幕，没字幕就转写，最后统一输出简繁规范、段落重组、带 `[mm:ss]` 锚点的文稿。
+它会自己判断：有字幕就取字幕出稿；**没字幕就停下来告诉你原因**，不会擅自去下模型。
 
 常用变体：
 
 ```powershell
-# 只探有没有现成字幕，不转写（秒回）
-.\.runtime\Scripts\python.exe scripts\digest.py '<链接>' --no-asr
+# 允许本地转写（首次下载 1.6GB 模型，30 分钟视频约 10 分钟）
+.\.runtime\Scripts\python.exe scripts\digest.py '<链接>' --transcribe
 
-# 已经有结果，只重生成文稿（改完 glossary.json 后用，不重跑转写）
+# 凭据过期时自动拉起二维码登录，扫完继续
+.\.runtime\Scripts\python.exe scripts\digest.py '<链接>' --relogin
+
+# 已经有结果，只重生成文稿（改完 glossary.json 后用）
 .\.runtime\Scripts\python.exe scripts\digest.py '<链接>' --reuse
 
 # 换模型：small 更快更差，turbo 默认
@@ -211,13 +231,16 @@ B 站发的 SESSDATA 有效期通常 **3 个月**（可在 DevTools 的 Expires 
 
 脚本逐行输出 JSON，**只看最后一行**：
 
-| `status` | 含义 | 该做什么 |
-|---|---|---|
-| `ok` | 完成 | 读 `markdown` 指向的文件 |
-| `need_asr` | 要转写（命令仍在继续跑，除非加了 `--no-asr`） | 带 `eta_minutes`，可先告知预计耗时 |
-| `need_asr` + `--no-asr` | 没有现成字幕 | 问用户要不要花时间转写 |
-| `empty` | 拿到轨道但没文字 | 如实说明，不要编 |
-| `error` | 失败 | 读 stderr 的 `message`，判断网络/凭据/风控，别反复重试 |
+| `status` | 退出码 | 含义 | 该做什么 |
+|---|---|---|---|
+| `ok` | 0 | 出稿了 | 读 `markdown` 指向的文件 |
+| `need_asr` | 2 | 登录有效，但视频确实没有字幕轨 | 看 `eta_minutes`，问用户要不要加 `--transcribe` |
+| `auth_expired` | 4 | 凭据过期（nav 返回 -101） | 重新扫码，或加 `--relogin` 自动续期 |
+| `auth_missing` | 4 | 匿名，看不到登录专属轨道 | 先登录；这不等于视频没字幕 |
+| `auth_unverified` | 4 | nav 不通，状态不明 | 稍后重试，不要猜 |
+| `native_failed` | 5 | 有字幕轨但下载全失败 | 重试一次 |
+| `empty` | 3 | 拿到轨道但没文字 | 如实说明，不要编 |
+| `error` | 1 | 失败 | 读 stderr 的 `message`，判断网络/凭据/风控，别反复重试 |
 
 ### 术语纠错表
 
@@ -243,15 +266,17 @@ B 站发的 SESSDATA 有效期通常 **3 个月**（可在 DevTools 的 Expires 
 
 ## 给 AI 助手的接入说明
 
-如果你是拿到这个仓库的大模型，按这个顺序做，不要跳步：
+**完整协议见 [AGENTS.md](AGENTS.md)**——跨工具通用，Codex / Cursor / Claude Code 都会自动读它。
+这里只列要点，细节以那份为准：
 
-1. **先检查前置**：`uv --version`、`ffmpeg -version`。缺 uv 就别往下走，先让用户装。
-2. **跑初始化**：`powershell -File .\scripts\bootstrap.ps1`。不要用系统 Python 装依赖，不要 `pip install -g`。
-3. **检查凭据**：看 `.credentials\sessdata.txt` 是否存在且非空。
-   - 不存在或为空 → **停下来提醒用户填**，告诉他去 `F12 → Application → Cookies → bilibili.com → 筛 sess → 右键 SESSDATA → 复制值`，粘到 `.credentials\sessdata.txt`（或双击 `save-sessdata.bat`）。
-   - **不要**自己尝试读浏览器 cookie、解密 cookie 数据库、或从任何地方抓取登录态。这一条没有例外。
-4. **先探后跑**：`digest.py '<url>' --no-asr` 看 `auth` 是不是 `sessdata`。是 `anonymous` 就先回到第 3 步。
-5. **然后才跑正式命令**，读最后一行 JSON 的 `markdown` 路径。
+1. **先探环境再开口**：`Test-Path .\.runtime\Scripts\python.exe` → `scripts\check_auth.py`。
+   凭据是 `valid` 就直接问视频链接；`expired` / `none` 才谈登录。
+2. **需要凭据时同屏给两个选项**：A 用户自己填 / B 我来扫码登录。**只有用户明确同意**才能执行 B，
+   「我不知道怎么弄」是求助信号，不是授权。
+3. **绝不读浏览器 cookie 存储**、不要密码/验证码、不代扫、不让用户在聊天里贴 token。
+4. **默认不转写**。要转写必须是用户同意后显式加 `--transcribe`，并先告知耗时与模型体积。
+5. **看最后一行 JSON 的 `status`**：`ok` 出稿；`need_asr` 问用户；`auth_expired` / `auth_missing`
+   先解决登录（`--relogin` 可自动续期）；`native_failed` 重试；`error` 读 message 别硬重试。
 6. **文稿里的错字**：英文品牌名误听 → 追加到 `glossary.json` 再 `--reuse`；中文同音错 → 按语义修正，并在回复末尾列出改了哪些，不要静默改。
 7. **数字类内容不自行补齐**：前后矛盾就指出矛盾（比如同一数字在两处出现不同值），不要二选一。
 8. **引用给时间点**：`transcript.md` 每段前都有 `[mm:ss]`，按它标注。
