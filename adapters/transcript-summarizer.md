@@ -4,7 +4,7 @@
 
 它们**拿不到字幕**，只能总结你已经拿到的文稿。流程是：
 
-1. 先用本仓库（或 SubBatch 这类工具）得到 `outputs\<BV号>\transcript.md`
+1. 先用本仓库（或 SubBatch 这类工具）得到 `outputs\<BV号>_p<分P号>\transcript.md`
 2. 把文稿内容贴给那个 AI
 3. 把下面这段放进它的「自定义指令 / 人设 / 系统提示」
 

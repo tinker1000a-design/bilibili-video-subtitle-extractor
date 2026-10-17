@@ -20,6 +20,9 @@ import time
 from urllib.parse import parse_qs, urlparse
 
 import requests
+from credentials import extract_token as validate_token
+from check_auth import check
+from file_io import atomic_text
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEST = ROOT / '.credentials' / 'sessdata.txt'
@@ -41,14 +44,15 @@ def emit(**fields):
 
 
 def mask(token):
-    return token[:4] + '...' + token[-4:] if len(token) > 12 else token
+    return '***'
 
 
 def fresh_key(session):
     response = session.get(GEN, timeout=15)
+    response.raise_for_status()
     payload = response.json()
     if payload.get('code') != 0:
-        raise RuntimeError('generate rejected: %s' % payload.get('message'))
+        raise RuntimeError('generate rejected')
     data = payload['data'] or {}
     url, key = data.get('url'), data.get('qrcode_key')
     if not url or not key:
@@ -88,13 +92,28 @@ def wait_for_scan(session, key, timeout, interval):
     """Poll until the user confirms, the code expires, or time runs out."""
     deadline = time.monotonic() + timeout
     last_state = None
+    failures = 0
     while time.monotonic() < deadline:
-        response = session.get(POLL, params={'qrcode_key': key}, timeout=15)
+        try:
+            response = session.get(POLL, params={'qrcode_key': key}, timeout=15)
+            response.raise_for_status()
+        except (requests.Timeout, requests.ConnectionError):
+            failures += 1
+            if failures > 2:
+                raise
+            emit(status='retrying', stage='poll', attempt=failures)
+            time.sleep(interval)
+            continue
+        failures = 0
         payload = response.json()
+        if payload.get('code') != 0:
+            raise RuntimeError('poll rejected')
         data = payload.get('data') or {}
         code = data.get('code')
         state = {WAITING_SCAN: 'waiting_scan', WAITING_CONFIRM: 'waiting_confirm',
                  EXPIRED: 'expired', 0: 'ok'}.get(code, 'unknown:%s' % code)
+        if state.startswith('unknown:'):
+            raise RuntimeError('unexpected poll state')
         if state != last_state:
             if state != 'ok':
                 emit(status=state)
@@ -105,6 +124,12 @@ def wait_for_scan(session, key, timeout, interval):
             return None, response
         time.sleep(interval)
     return None, None
+
+
+class LoginError(RuntimeError):
+    def __init__(self, stage):
+        self.stage = stage
+        super().__init__('QR login failed at ' + stage)
 
 
 def main():
@@ -120,6 +145,17 @@ def main():
                              'the user is still looking at')
     parser.add_argument('--open-image', action='store_true', help='open the QR image with the default viewer')
     args = parser.parse_args()
+    if args.timeout <= 0 or args.interval < 0.5 or not 0 <= args.retries <= 2:
+        parser.error('timeout must be positive, interval >= 0.5, retries between 0 and 2')
+    try:
+        return run(args)
+    except LoginError as exc:
+        emit(status='error', stage=exc.stage, message=str(exc),
+             error_type=type(exc.__cause__).__name__)
+        return 1
+
+
+def run(args):
 
     session = requests.Session()
     session.headers.update({'User-Agent': UA, 'Referer': 'https://www.bilibili.com/'})
@@ -131,10 +167,12 @@ def main():
         try:
             url, key = fresh_key(session)
         except Exception as exc:
-            emit(status='error', stage='generate', message=str(exc)[:300])
-            return 1
+            raise LoginError('generate') from exc
 
-        png = render(url)
+        try:
+            png = render(url)
+        except Exception as exc:
+            raise LoginError('render') from exc
         if args.open_image and hasattr(os, 'startfile'):
             try:
                 os.startfile(str(png))
@@ -142,7 +180,10 @@ def main():
                 pass
         emit(status='qr', png=str(png), url=url, timeout=args.timeout, attempt=attempt)
 
-        data, response = wait_for_scan(session, key, args.timeout, args.interval)
+        try:
+            data, response = wait_for_scan(session, key, args.timeout, args.interval)
+        except Exception as exc:
+            raise LoginError('poll') from exc
 
         if data is None and response is None:
             emit(status='timeout', hint='no scan within %ds' % args.timeout)
@@ -154,16 +195,20 @@ def main():
             emit(status='expired', hint='code expired before confirmation')
             return 2
 
-        token = extract_token(data, session, response)
-        if not token:
-            emit(status='error', stage='extract', message='logged in but SESSDATA not found in response')
-            return 1
-        if 'http' in token.lower():
-            emit(status='error', stage='extract', message='extracted value looks like a URL')
-            return 1
-
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(token, encoding='utf-8')
+        try:
+            token = validate_token(extract_token(data, session, response) or '')
+        except Exception as exc:
+            raise LoginError('extract') from exc
+        try:
+            state, _ = check(token)
+            if state != 'valid':
+                raise RuntimeError('login was not confirmed')
+        except Exception as exc:
+            raise LoginError('verify') from exc
+        try:
+            atomic_text(dest, token, private=True)
+        except Exception as exc:
+            raise LoginError('save') from exc
         emit(status='ok', saved=str(dest), token=mask(token), token_len=len(token),
              has_pct2c='%2C' in token)
         return 0

@@ -52,7 +52,7 @@ def main():
                 print(json.dumps(dict(status='progress', audio_seconds=round(segment.end, 2),
                                       elapsed_seconds=round(time.perf_counter()-loaded, 2))), flush=True)
                 progress = segment.end + 20
-    meta = dict(url=metadata.get('url'), title=metadata.get('title'), method='speech-recognition',
+    meta = dict(metadata, method='speech-recognition',
                 model=args.model, device=args.device, compute_type='int8' if args.device == 'cpu' else 'float32',
                 audio=str(pathlib.Path(args.audio).resolve()), duration=info.duration,
                 language=info.language, language_probability=info.language_probability,

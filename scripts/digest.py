@@ -21,6 +21,8 @@ GLOSSARY = ROOT / 'glossary.json'
 sys.path.insert(0, str(HERE))
 from check_auth import check as check_token  # noqa: E402
 from fetch_subtitles import load_sessdata, normalize_url, resolve_url  # noqa: E402
+from credentials import resolve_token  # noqa: E402
+from file_io import atomic_text  # noqa: E402
 
 try:
     import opencc
@@ -84,18 +86,36 @@ def slug_for(url):
 def find_cache(out_root, slug, url):
     """Reuse only matching metadata, including old BV-only output directories."""
     directories = [out_root / slug]
+    index_path = out_root / 'cache-index.json'
+    if index_path.is_file():
+        try:
+            alias = json.loads(index_path.read_text(encoding='utf-8')).get(slug)
+            if isinstance(alias, str) and pathlib.Path(alias).name == alias and alias not in ('.', '..'):
+                directories.append(out_root / alias)
+        except (OSError, ValueError, AttributeError):
+            pass
     if re.fullmatch(r'BV[0-9A-Za-z]+_p[0-9]+', slug):
         directories.append(out_root / slug.rsplit('_p', 1)[0])
     for directory in directories:
-        for candidate in (directory, directory / 'probe'):
+        candidates = [directory / 'probe', directory]
+        current = directory / 'current-result.json'
+        if current.is_file():
+            try:
+                selected = json.loads(current.read_text(encoding='utf-8'))['result']
+                if selected not in ('.', 'probe'):
+                    raise ValueError('invalid result location')
+                candidates = [directory / selected]
+            except (OSError, ValueError, KeyError, TypeError):
+                raise RuntimeError('Invalid current-result pointer; fetch this video again') from None
+        for candidate in candidates:
             path = candidate / 'subtitles.json'
             if not path.is_file():
                 continue
             try:
                 data = json.loads(path.read_text(encoding='utf-8-sig'))
                 meta = data['metadata']
-                cached_url = meta.get('url')
-                if not cached_url or slug_for(cached_url) != slug:
+                identities = [meta.get('url'), meta.get('input_url')]
+                if not any(value and slug_for(value) == slug for value in identities):
                     continue
                 if meta.get('part') is not None and re.fullmatch(r'BV[0-9A-Za-z]+_p[0-9]+', slug):
                     if int(meta['part']) != int(slug.rsplit('_p', 1)[1]):
@@ -106,6 +126,23 @@ def find_cache(out_root, slug, url):
             except (OSError, ValueError, KeyError, TypeError):
                 continue
     raise RuntimeError('No matching subtitle cache for this video/part; fetch it without --reuse first')
+
+
+def select_cache(out_root, out_dir, result_out, metadata):
+    """Record the successful source and its input/canonical URL aliases."""
+    relative = result_out.relative_to(out_dir).as_posix()
+    atomic_text(out_dir / 'current-result.json', json.dumps({'result': relative}))
+    path = out_root / 'cache-index.json'
+    try:
+        index = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+        if not isinstance(index, dict):
+            index = {}
+    except (OSError, ValueError):
+        index = {}
+    for url in (metadata.get('url'), metadata.get('input_url')):
+        if url:
+            index[slug_for(url)] = out_dir.name
+    atomic_text(path, json.dumps(index, ensure_ascii=False, indent=2))
 
 
 def clock(seconds):
@@ -234,11 +271,12 @@ def main():
                         help='defaults to .credentials/sessdata.txt when that file is non-empty')
     parser.add_argument('--model', default='turbo')
     parser.add_argument('--language', default='zh')
-    parser.add_argument('--transcribe', action='store_true',
+    asr_options = parser.add_mutually_exclusive_group()
+    asr_options.add_argument('--transcribe', action='store_true',
                         help='allow local ASR when no caption track is readable (downloads a '
                              '1.6GB model on first use, ~10 min for a 30 min video). '
                              'Without this flag the tool stops at need_asr and reports why')
-    parser.add_argument('--no-asr', action='store_true',
+    asr_options.add_argument('--no-asr', action='store_true',
                         help='kept for compatibility; not transcribing is now the default')
     parser.add_argument('--readable', action='store_true',
                         help='shorter paragraphs for human reading (70 chars instead of 120, '
@@ -252,6 +290,8 @@ def main():
     args = parser.parse_args()
 
     args.url = resolve_url(args.url)
+    host = urlparse(args.url).hostname or ''
+    is_bili = host == 'bilibili.com' or host.endswith('.bilibili.com')
     slug = slug_for(args.url)
     out_root = pathlib.Path(args.out_root)
     work_root = pathlib.Path(args.work_root)
@@ -261,22 +301,20 @@ def main():
     result_out = find_cache(out_root, slug, args.url) if args.reuse else None
 
     sessdata = args.sessdata_file
-    if not args.reuse and sessdata is None and DEFAULT_SESSDATA.is_file() and DEFAULT_SESSDATA.read_text(encoding='utf-8-sig').strip():
-        sessdata = str(DEFAULT_SESSDATA)
-
     common = ['--model', args.model, '--language', args.language]
     if sessdata:
         common += ['--sessdata-file', sessdata]
 
     # 先确认凭据到底是「没有」「过期」还是「可用」。
     # player/wbi/v2 对过期凭据和无字幕视频返回完全一样的空结果，所以这一步不能省。
-    auth_state, auth_detail = 'none', None
-    if sessdata and not args.reuse:
-        try:
-            token = load_sessdata(sessdata)
-        except Exception as exc:
-            token = None
-            auth_detail = {'message': str(exc)[:200]}
+    auth_state, auth_detail = ('none' if is_bili else 'not_applicable'), None
+    if is_bili and not args.reuse:
+        token, source, problem = resolve_token(sessdata, default=DEFAULT_SESSDATA)
+        if args.sessdata_file and problem:
+            raise ValueError('Credential file is missing, unreadable or invalid')
+        if source != 'BILI_SESSDATA' and token and sessdata is None:
+            sessdata = source
+            common += ['--sessdata-file', sessdata]
         if token:
             auth_state, auth_detail = check_token(token)
 
@@ -295,11 +333,11 @@ def main():
         ), ensure_ascii=False), flush=True)
         return 4
 
-    if not args.reuse and args.relogin and auth_state in ('expired', 'none'):
+    if is_bili and not args.reuse and args.relogin and auth_state in ('expired', 'none'):
         target = sessdata or str(DEFAULT_SESSDATA)
         print(json.dumps(dict(status='relogin', reason='credential %s' % auth_state,
                               hint='启动二维码登录，扫完自动继续'), ensure_ascii=False), flush=True)
-        rc = subprocess.call([sys.executable, str(HERE / 'qr_login.py'), '--out', target])
+        rc = subprocess.call([sys.executable, str(HERE / 'qr_login.py'), '--out', target, '--open-image'])
         if rc != 0:
             print(json.dumps(dict(status='auth_expired', action='login_required',
                                   hint='二维码登录没有完成，凭据仍不可用。重跑或手动扫码后再试'),
@@ -358,6 +396,11 @@ def main():
                   flush=True)
             return 4
 
+        if probe_status == 'native_empty':
+            print(json.dumps(dict(status='empty', title=probe.get('title'),
+                                  hint='字幕轨已读取，但没有有效文字'), ensure_ascii=False), flush=True)
+            return 3
+
         if probe_status == 'native_failed':
             print(json.dumps(dict(status='native_failed', action='retry',
                                   hint='字幕轨存在但一条都没下载成功，先重试；不要直接转写',
@@ -372,7 +415,7 @@ def main():
             if not args.transcribe:
                 print(json.dumps(dict(status='need_asr', reason='no_caption_track', auth=auth_state,
                                       duration=duration, eta_minutes=eta, title=probe.get('title'),
-                                      hint='登录有效且这个视频确实没有字幕轨。要转写需显式加 --transcribe，'
+                                      hint='当前提取器未发现可用字幕轨。要转写需显式加 --transcribe，'
                                            '首次会下载约 1.6GB 模型'), ensure_ascii=False), flush=True)
                 return 2
             print(json.dumps(dict(status='need_asr', duration=duration, eta_minutes=eta,
@@ -391,6 +434,9 @@ def main():
     if not cues:
         print(json.dumps(dict(status='empty', title=meta.get('title')), ensure_ascii=False))
         return 3
+
+    if not args.reuse:
+        select_cache(out_root, out_dir, result_out, meta)
 
     paragraphs = build_paragraphs(
         cues,

@@ -7,8 +7,16 @@ import xml.etree.ElementTree as ET
 
 
 def clean(text):
-    text = re.sub(r'<[^>]*>', '', text)
-    return re.sub(r'\s+', ' ', html.unescape(text)).strip()
+    """Normalize whitespace only. Plain JSON/ASR text is not HTML."""
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def markup_text(text):
+    # Strip only subtitle presentation tags, before decoding entities once.
+    text = re.sub(r'</?(?:b|i|u|s|font|ruby|rt|c|v|lang)(?=[\s.>])[^>]*>', '', text,
+                  flags=re.IGNORECASE)
+    text = re.sub(r'<(?:\d{2}:)?\d{2}:\d{2}\.\d{3}>', '', text)
+    return clean(html.unescape(text))
 
 
 def seconds(value):
@@ -44,7 +52,7 @@ def read_captions(path):
                 if '-->' in line:
                     left, right = line.split('-->', 1)
                     cues.append(dict(start=seconds(left), end=seconds(right.strip().split()[0]),
-                                     text=clean(' '.join(lines[i + 1:]))))
+                                     text=markup_text(' '.join(lines[i + 1:]))))
                     break
     elif stripped.startswith('<'):
         root = ET.fromstring(text)

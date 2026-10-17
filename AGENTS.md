@@ -46,7 +46,7 @@ Test-Path .\.runtime\Scripts\python.exe            # 环境是否已部署
 
 选 B 需要你明确说一句"可以/你来/自动"，我不会替你决定。
 选 B 之后会发生这些事：
-  · 首次会下载 Python 依赖，约 1 分钟；如果没有现成字幕还要下 1.6GB 语音模型
+  · 首次会下载 Python 依赖；仅在另行明确同意语音转写后，才会下载约 1.6GB 模型
   · 你的 B 站账号会新增一条登录设备记录（可在 App 里随时移除）
   · 凭据写在 .credentials\sessdata.txt，该文件已被 .gitignore 排除
 ```
@@ -135,7 +135,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 | 退出码 | status | 含义 | 你该做什么 |
 |---|---|---|---|
 | 0 | `ok` | 出稿了 | 读 `markdown` 路径，进入分析 |
-| 2 | `need_asr` | 登录有效，但**这个视频确实没有字幕轨** | 把 `eta_minutes` 告诉用户，问他要不要加 `--transcribe` |
+| 2 | `need_asr` | 当前提取器未发现字幕候选 | 把 `eta_minutes` 告诉用户，问他要不要加 `--transcribe` |
 | 4 | `auth_expired` / `auth_missing` / `auth_unverified` | **看不到**字幕，不等于没有 | 先解决登录（或加 `--relogin` 一条命令续期），不要开转写 |
 | 5 | `native_failed` | 字幕轨存在但下载失败 | 重试一次；仍失败再考虑转写 |
 | 3 | `empty` | 拿到轨道但没文字 | 如实说，不要编 |
@@ -161,7 +161,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 ```
 
 它读出 `skills/video-digest/SKILL.md`，把里面的 `{REPO}` 换成本机克隆路径，写进机器上**已经存在**
-的技能目录（WorkBuddy / DeepSeek Harness / Claude Code / Codex），不会给没装的工具造空目录。
+的技能目录（WorkBuddy / DeepSeek Harness / Claude Code / Codex / `.agents/skills`），不会给没装的工具造空目录。同名技能若无当前克隆的安装标记、来自其他克隆或已被手改，则停止所有目标写入并返回 `conflict`。向用户说明具体路径；只有明确要求替换该目标时才使用 `--target <目录> --replace-existing`，备份使用唯一名称。
 输出一行 JSON：
 
 | 字段 | 含义 | 你该做什么 |
@@ -169,7 +169,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 | `installed[].path` | 技能文件写到哪了 | 报给用户，让他知道装在哪 |
 | `first_time: true` | 本机第一次装 | **继续第二步，输出教程** |
 | `first_time: false` | 以前装过，这次只是更新 | 一句「技能已更新」就够，**不要贴教程** |
-| `fallback_used: true` | 没探测到任何技能目录，用了 WorkBuddy 的默认路径 | 提醒用户「如果你用的是别的助手，告诉我，我改指到它的目录」 |
+| `status: no_target` | 没探测到技能目录，未写入 | 确定用户宿主后用 `--target` 指定，不假定装好了 |
+| `status: conflict` | 同名技能冲突，所有目标均未写入 | 报告路径和原因，不自动覆盖 |
 
 ### 第二步：输出使用教程
 

@@ -1,20 +1,20 @@
 """Fetch native captions; otherwise download audio and optionally transcribe it."""
 import argparse
 import json
-import os
 import pathlib
 import re
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from urllib.parse import parse_qs, urlparse
 
 import requests
 
 from subtitle_io import read_captions, write_result
+from credentials import load_sessdata, resolve_token, session_state
 
 UA = 'Mozilla/5.0'
-NAV = 'https://api.bilibili.com/x/web-interface/nav'
 
 
 def normalize_url(url):
@@ -42,30 +42,8 @@ def login_state(session, has_token):
     question directly: code 0 + isLogin true means the token works, -101 means it
     expired or is invalid.
     """
-    if not has_token:
-        return 'none', None
-    try:
-        payload = session.get(NAV, timeout=(10, 20)).json()
-    except (requests.RequestException, ValueError):
-        return 'unknown', None
-    data = payload.get('data') or {}
-    if payload.get('code') == 0 and data.get('isLogin'):
-        return 'valid', data.get('uname')
-    if payload.get('code') == -101:
-        return 'expired', None
-    return 'unknown', None
-
-
-def load_sessdata(path):
-    """Read a SESSDATA token from a file: bare token, SESSDATA=..., or a full Cookie header."""
-    text = pathlib.Path(path).read_text(encoding='utf-8-sig')
-    match = re.search(r'SESSDATA\s*=\s*([^;\s"\']+)', text)
-    if match:
-        return match.group(1)
-    token = text.strip().strip('"\'')
-    if token and not any(ch in token for ch in '\r\n \t'):
-        return token
-    raise RuntimeError('No usable SESSDATA token found in the cookie file')
+    state, detail = session_state(session, has_token)
+    return state, detail.get('uname') if detail else None
 
 
 def api(session, url, params):
@@ -131,7 +109,7 @@ def bilibili(args, session, work, out):
     (work / 'video_metadata.json').write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
     player = api(session, 'https://api.bilibili.com/x/player/wbi/v2', {'bvid': bvid, 'cid': cid})
     tracks = player.get('subtitle', {}).get('subtitles', [])
-    failures = []
+    failures, empty = [], 0
     for track in sorted(tracks, key=lambda t: language_rank(t.get('lan', ''), args.langs)):
         raw = work / 'native_caption.json'
         try:
@@ -140,7 +118,8 @@ def bilibili(args, session, work, out):
             if cues:
                 method = 'native-auto-caption' if track.get('lan', '').startswith('ai-') or track.get('ai_type') else 'native-caption'
                 return write_result(out, cues, dict(meta, method=method, language=track.get('lan'), timing='native', raw_file=str(raw.resolve())))
-        except (requests.RequestException, ValueError, RuntimeError) as exc:
+            empty += 1
+        except (requests.RequestException, ValueError, RuntimeError, ET.ParseError, KeyError, TypeError) as exc:
             failures.append(type(exc).__name__)
     meta['native_tracks_seen'] = len(tracks)
     meta['native_attempt_failures'] = failures
@@ -148,7 +127,7 @@ def bilibili(args, session, work, out):
     if args.native_only:
         if tracks:
             # 有轨却一条都没取到（否则上面已经 return 了）
-            return dict(meta, status='native_failed')
+            return dict(meta, status='native_failed' if failures else 'native_empty', empty_tracks=empty)
         state = getattr(args, 'auth', 'none')
         if state == 'expired':
             return dict(meta, status='auth_expired')
@@ -183,7 +162,9 @@ def generic(args, session, work, out):
         info = ydl.extract_info(args.url, download=False)
     if info.get('_type') in ('playlist', 'multi_video'):
         raise RuntimeError('This URL resolves to multiple videos; use a single-video URL')
-    meta = dict(url=info.get('webpage_url', args.url), title=info.get('title'), duration=info.get('duration'), extractor=info.get('extractor'))
+    meta = dict(url=info.get('webpage_url') or args.url, input_url=args.url,
+                title=info.get('title'), duration=info.get('duration'),
+                extractor=info.get('extractor'), video_id=info.get('id'))
     candidates = []
     for source, tracks in [('native-caption', info.get('subtitles', {})), ('native-auto-caption', info.get('automatic_captions', {}))]:
         for lang, formats in tracks.items():
@@ -192,7 +173,7 @@ def generic(args, session, work, out):
                 if ext in ('srt', 'vtt', 'json3', 'ttml', 'srv3') and fmt.get('url'):
                     rank = (language_rank(lang, args.langs), source != 'native-caption', ['srt', 'vtt', 'json3', 'ttml', 'srv3'].index(ext))
                     candidates.append((rank, source, lang, fmt))
-    errors = []
+    errors, empty = [], 0
     for _, source, lang, fmt in sorted(candidates, key=lambda t: t[0]):
         raw = work / ('native_caption.' + fmt['ext'])
         try:
@@ -204,11 +185,13 @@ def generic(args, session, work, out):
             cues = read_captions(raw)
             if cues:
                 return write_result(out, cues, dict(meta, method=source, language=lang, timing='native', raw_file=str(raw.resolve())))
-        except (requests.RequestException, ValueError, RuntimeError) as exc:
+            empty += 1
+        except (requests.RequestException, ValueError, RuntimeError, ET.ParseError, KeyError, TypeError) as exc:
             errors.append(type(exc).__name__)
     meta['native_attempt_failures'] = errors
     if args.native_only:
-        return dict(meta, status='no_native_captions')
+        status = ('native_failed' if errors else 'native_empty') if candidates else 'no_native_captions'
+        return dict(meta, status=status, native_tracks_seen=len(candidates), empty_tracks=empty)
     options.update(format='bestaudio/best', outtmpl=str(work / 'audio.%(ext)s'))
     with yt_dlp.YoutubeDL(options) as ydl:
         ydl.extract_info(args.url, download=True)
@@ -240,17 +223,17 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     session = requests.Session()
     session.headers.update({'User-Agent': UA})
-    token = None
-    if args.sessdata_file:
-        token = load_sessdata(args.sessdata_file)
-    else:
-        token = os.environ.get('BILI_SESSDATA') or None
-    if token:
-        session.cookies.set('SESSDATA', token, domain='.bilibili.com')
-    args.auth, args.uname = login_state(session, bool(token))
     args.url = resolve_url(args.url, session)
     parsed = urlparse(args.url)
     is_bili = parsed.hostname == 'bilibili.com' or (parsed.hostname or '').endswith('.bilibili.com')
+    args.auth, args.uname = 'not_applicable', None
+    if is_bili:
+        token, source, problem = resolve_token(args.sessdata_file)
+        if args.sessdata_file and problem:
+            raise ValueError('Credential file is missing, unreadable or invalid')
+        if token:
+            session.cookies.set('SESSDATA', token, domain='.bilibili.com', secure=True)
+        args.auth, args.uname = login_state(session, bool(token))
     if not args.native_only and (not shutil.which('ffmpeg') or not shutil.which('ffprobe')):
         raise RuntimeError('ffmpeg and ffprobe are required for media fallback')
     if is_bili and not args.generic:
