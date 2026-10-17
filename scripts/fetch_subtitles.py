@@ -17,6 +17,22 @@ UA = 'Mozilla/5.0'
 NAV = 'https://api.bilibili.com/x/web-interface/nav'
 
 
+def normalize_url(url):
+    url = url.strip()
+    if re.fullmatch(r'BV[0-9A-Za-z]+', url):
+        return 'https://www.bilibili.com/video/' + url + '/'
+    return url
+
+
+def resolve_url(url, session=None):
+    url = normalize_url(url)
+    if urlparse(url).hostname in ('b23.tv', 'www.b23.tv'):
+        response = (session or requests).get(url, timeout=30)
+        response.raise_for_status()
+        return normalize_url(response.url)
+    return url
+
+
 def login_state(session, has_token):
     """Tell "no token" / "expired token" / "token works" apart.
 
@@ -232,12 +248,8 @@ def main():
     if token:
         session.cookies.set('SESSDATA', token, domain='.bilibili.com')
     args.auth, args.uname = login_state(session, bool(token))
+    args.url = resolve_url(args.url, session)
     parsed = urlparse(args.url)
-    if parsed.hostname in ('b23.tv', 'www.b23.tv'):
-        redirected = session.get(args.url, timeout=30)
-        redirected.raise_for_status()
-        args.url = redirected.url
-        parsed = urlparse(args.url)
     is_bili = parsed.hostname == 'bilibili.com' or (parsed.hostname or '').endswith('.bilibili.com')
     if not args.native_only and (not shutil.which('ffmpeg') or not shutil.which('ffprobe')):
         raise RuntimeError('ffmpeg and ffprobe are required for media fallback')

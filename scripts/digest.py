@@ -5,11 +5,13 @@ local Whisper transcription as fallback, then Simplified-Chinese normalisation a
 paragraph rebuilding. Emits a final JSON line describing what was produced.
 """
 import argparse
+import hashlib
 import json
 import pathlib
 import re
 import subprocess
 import sys
+from urllib.parse import parse_qs, urlparse
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -18,7 +20,7 @@ GLOSSARY = ROOT / 'glossary.json'
 
 sys.path.insert(0, str(HERE))
 from check_auth import check as check_token  # noqa: E402
-from fetch_subtitles import load_sessdata  # noqa: E402
+from fetch_subtitles import load_sessdata, normalize_url, resolve_url  # noqa: E402
 
 try:
     import opencc
@@ -67,10 +69,43 @@ def call(script, args_list):
 
 
 def slug_for(url):
-    match = re.search(r'BV[0-9A-Za-z]+', url)
-    if match:
-        return match.group()
-    return re.sub(r'[^0-9A-Za-z]+', '_', url)[:40].strip('_') or 'video'
+    url = normalize_url(url)
+    parsed = urlparse(url)
+    match = re.search(r'/video/(BV[0-9A-Za-z]+)', parsed.path)
+    if match and (parsed.hostname == 'bilibili.com' or (parsed.hostname or '').endswith('.bilibili.com')):
+        part = int(parse_qs(parsed.query).get('p', ['1'])[0])
+        if part < 1:
+            raise ValueError('Part must be positive')
+        return f'{match.group(1)}_p{part}'
+    label = re.sub(r'[^0-9A-Za-z]+', '_', url)[:40].strip('_') or 'video'
+    return label + '_' + hashlib.sha256(url.encode('utf-8')).hexdigest()[:16]
+
+
+def find_cache(out_root, slug, url):
+    """Reuse only matching metadata, including old BV-only output directories."""
+    directories = [out_root / slug]
+    if re.fullmatch(r'BV[0-9A-Za-z]+_p[0-9]+', slug):
+        directories.append(out_root / slug.rsplit('_p', 1)[0])
+    for directory in directories:
+        for candidate in (directory, directory / 'probe'):
+            path = candidate / 'subtitles.json'
+            if not path.is_file():
+                continue
+            try:
+                data = json.loads(path.read_text(encoding='utf-8-sig'))
+                meta = data['metadata']
+                cached_url = meta.get('url')
+                if not cached_url or slug_for(cached_url) != slug:
+                    continue
+                if meta.get('part') is not None and re.fullmatch(r'BV[0-9A-Za-z]+_p[0-9]+', slug):
+                    if int(meta['part']) != int(slug.rsplit('_p', 1)[1]):
+                        continue
+                if not isinstance(data['cues'], list):
+                    continue
+                return candidate
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+    raise RuntimeError('No matching subtitle cache for this video/part; fetch it without --reuse first')
 
 
 def clock(seconds):
@@ -216,14 +251,17 @@ def main():
     parser.add_argument('--work-root', default=str(ROOT / 'work'))
     args = parser.parse_args()
 
+    args.url = resolve_url(args.url)
     slug = slug_for(args.url)
     out_root = pathlib.Path(args.out_root)
     work_root = pathlib.Path(args.work_root)
     out_dir = out_root / slug
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    result_out = find_cache(out_root, slug, args.url) if args.reuse else None
+
     sessdata = args.sessdata_file
-    if sessdata is None and DEFAULT_SESSDATA.is_file() and DEFAULT_SESSDATA.read_text(encoding='utf-8-sig').strip():
+    if not args.reuse and sessdata is None and DEFAULT_SESSDATA.is_file() and DEFAULT_SESSDATA.read_text(encoding='utf-8-sig').strip():
         sessdata = str(DEFAULT_SESSDATA)
 
     common = ['--model', args.model, '--language', args.language]
@@ -233,7 +271,7 @@ def main():
     # 先确认凭据到底是「没有」「过期」还是「可用」。
     # player/wbi/v2 对过期凭据和无字幕视频返回完全一样的空结果，所以这一步不能省。
     auth_state, auth_detail = 'none', None
-    if sessdata:
+    if sessdata and not args.reuse:
         try:
             token = load_sessdata(sessdata)
         except Exception as exc:
@@ -257,7 +295,7 @@ def main():
         ), ensure_ascii=False), flush=True)
         return 4
 
-    if args.relogin and auth_state in ('expired', 'none'):
+    if not args.reuse and args.relogin and auth_state in ('expired', 'none'):
         target = sessdata or str(DEFAULT_SESSDATA)
         print(json.dumps(dict(status='relogin', reason='credential %s' % auth_state,
                               hint='启动二维码登录，扫完自动继续'), ensure_ascii=False), flush=True)
@@ -284,7 +322,7 @@ def main():
                              ensure_ascii=False), flush=True)
             return 4
 
-    if auth_state == 'none':
+    if auth_state == 'none' and not args.reuse:
         print('[hint] 未配置有效 SESSDATA（匿名模式）：公开字幕轨仍可尝试，但登录专属轨道一律不可见。\n'
               f'       登录方式：{ROOT / "login-qr.bat"}（扫码，推荐）或 {ROOT / ".credentials" / "README.txt"}',
               file=sys.stderr, flush=True)
@@ -292,14 +330,9 @@ def main():
         print('[warn] 无法确认凭据状态（nav 请求失败），继续按已配置凭据尝试。',
               file=sys.stderr, flush=True)
 
-    result_out = None
     payload = None
     if args.reuse:
-        for candidate in (out_dir, out_dir / 'probe'):
-            if (candidate / 'subtitles.json').is_file():
-                result_out = candidate
-                print(json.dumps(dict(status='reusing', path=str(candidate)), ensure_ascii=False), flush=True)
-                break
+        print(json.dumps(dict(status='reusing', path=str(result_out)), ensure_ascii=False), flush=True)
     if result_out is None:
         code, probe, err = call('fetch_subtitles.py',
                                 [args.url, '--native-only', '--work', str(work_root / slug / 'probe'),
@@ -362,7 +395,6 @@ def main():
     paragraphs = build_paragraphs(
         cues,
         target=70 if args.readable else 120,
-        glossary=load_glossary(),
         marker_min=25 if args.readable else None,
     )
     title = (meta.get('title') or slug).strip()
@@ -390,14 +422,31 @@ def main():
     md_path = out_dir / f'{stem}.md'
     txt_path = out_dir / f'{stem}.txt'
     md_path.write_text('\n'.join(lines), encoding='utf-8')
-    txt_path.write_text('\n\n'.join(apply_glossary(to_simplified(c['text']), load_glossary())
-                                  for c in cues), encoding='utf-8')
+    # The source text remains suitable for punctuation-only comparison. Any
+    # spelling/glossary edits are a separate, explicitly labelled artifact.
+    txt_path.write_text('\n\n'.join(c['text'] for c in cues), encoding='utf-8')
+    corrections = []
+    glossary = load_glossary() if asr else []
+    for i, cue in enumerate(cues, 1):
+        revised = apply_glossary(cue['text'], glossary)
+        if revised != cue['text']:
+            corrections.append(dict(cue=i, original=cue['text'], revised=revised))
+    corrected_path = out_dir / f'{stem}-corrected.txt'
+    corrections_path = out_dir / f'{stem}-corrections.json'
+    if corrections:
+        corrected_path.write_text('\n\n'.join(apply_glossary(c['text'], glossary) for c in cues), encoding='utf-8')
+        corrections_path.write_text(json.dumps(corrections, ensure_ascii=False, indent=2), encoding='utf-8')
+    else:
+        corrected_path.unlink(missing_ok=True)
+        corrections_path.unlink(missing_ok=True)
 
     print(json.dumps(dict(status='ok', title=title, method=method,
                           paragraphs=len(paragraphs), chars=sum(len(c['text']) for c in cues),
                           readable=args.readable,
                           simplified=CC is not None,
                           markdown=str(md_path), text=str(txt_path),
+                          corrected_text=str(corrected_path) if corrections else None,
+                          corrections=str(corrections_path) if corrections else None,
                           subtitles=str(result_out / 'subtitles.srt')), ensure_ascii=False))
     return 0
 

@@ -99,7 +99,7 @@ description: 把视频链接变成可读文稿并分析内容。只要用户发�
 （tracks=0、`need_login_subtitle` 不返回）。只看那个接口，过期就会被当成没字幕，然后白跑一次转写。
 `nav` 是唯一能分辨的信号源。实测：有效 code=0 isLogin=true；无效 code=-101。
 
-**登录态仍是质量分水岭**：同一 29.5 分钟视频，有登录态 1.5 秒出稿、零错字；匿名走 ASR 603 秒、
+**登录态仍是质量分水岭**：同一 29.5 分钟视频，有登录态 1.5 秒出稿、无需再次语音识别，准确性取决于字幕本身；匿名走 ASR 603 秒、
 3.46% 简繁混用、同一地名 7 种写法。
 
 ### 需要凭据时：必须同时给两个选项
@@ -136,7 +136,7 @@ description: 把视频链接变成可读文稿并分析内容。只要用户发�
 | `error` | 1 | 失败 | 读 stderr 的 message，判断是网络、凭据还是风控，不要反复重试 |
 
 `method` 字段是质量的分水岭，必须写进结论：
-- `native-caption` / `native-auto-caption`：站点字幕轨道，质量高，可当原文引用
+- `native-caption` / `native-auto-caption`：站点字幕轨道；自动字幕仍可能有误，正式引用前核对原音频
 - `speech-recognition`：本地识别，已做简繁统一，但**专名、数字、同音词可能出错**
 
 ## 分析规范
@@ -171,7 +171,7 @@ description: 把视频链接变成可读文稿并分析内容。只要用户发�
 - 不绕过登录/付费/DRM；二维码必须用户本人扫，不得代扫或代确认
 - 只处理单个视频，不静默遍历播放列表；合集需逐个给链接
 - 拿不到字幕、也转写不出有效语音时，如实报告阻碍，不用猜的内容填空
-- 输出文件保存在 `{REPO}\outputs\<BV号>\`（`transcript.md` / `transcript.txt` / `probe\subtitles.srt`）
+- 输出文件保存在 `{REPO}\outputs\<BV号>_p<分P号>\`（`transcript.md` / `transcript.txt` / `probe\subtitles.srt`）
 
 ## 环境
 
@@ -201,15 +201,15 @@ description: 把视频链接变成可读文稿并分析内容。只要用户发�
 `digest.py` 默认不补标点是有意的：对总结任务来说，无标点原文更安全（补错标点比没标点更误导）。
 但当用户明确要「给我一份能读的」「人类可读版」「加个标点」时，按下面做：
 
-1. 读 `{REPO}\outputs\<BV号>\transcript.txt`（纯正文，无时间戳）。
+1. 读 `{REPO}\outputs\<BV号>_p<分P号>\transcript.txt`（纯正文，无时间戳）。
 2. **只插标点和分段，一个字符都不改**。不改错别字、不补全省略、不调整语序、不合并重复。
    口语里的「就是说」「那个」照原样保留。
 3. 写到同目录 `transcript-readable-punct.txt`，然后**必须**跑校验：
 
    ```powershell
    & '{REPO}\.runtime\Scripts\python.exe' '{REPO}\scripts\check_punct.py' `
-       '{REPO}\outputs\<BV号>\transcript.txt' `
-       '{REPO}\outputs\<BV号>\transcript-readable-punct.txt'
+       '{REPO}\outputs\<BV号>_p<分P号>\transcript.txt' `
+       '{REPO}\outputs\<BV号>_p<分P号>\transcript-readable-punct.txt'
    ```
 
 4. 退出码 0 才算完成。退出码 1 时脚本会指出第一处差异（哪个字多写了、少了、改了），

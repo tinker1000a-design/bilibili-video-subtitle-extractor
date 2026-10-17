@@ -49,6 +49,11 @@ def read_captions(path):
     elif stripped.startswith('<'):
         root = ET.fromstring(text)
         for node in root.iter():
+            if node.tag.split('}')[-1] == 'p' and 't' in node.attrib and 'd' in node.attrib:
+                start = float(node.attrib['t']) / 1000
+                end = start + float(node.attrib['d']) / 1000
+                cues.append(dict(start=start, end=end, text=clean(''.join(node.itertext()))))
+                continue
             if node.tag.split('}')[-1] == 'p' and 'begin' in node.attrib:
                 start = seconds(node.attrib['begin'])
                 end = seconds(node.attrib['end']) if 'end' in node.attrib else start + seconds(node.attrib.get('dur', '0s'))

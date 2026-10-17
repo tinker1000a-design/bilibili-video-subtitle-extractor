@@ -2,8 +2,8 @@
 
 给它一个 B 站视频链接，它给你一份带时间锚点的可读文稿。
 
-- **有官方字幕轨** → 直接下载整理，**1-2 秒**出结果，零错字
-- **没有字幕轨** → 自动下音轨，本地 Whisper 转写兜底（30 分钟视频约 10 分钟）
+- **有官方字幕轨** → 直接下载整理，**1-2 秒**出结果，无需再次语音识别，准确性取决于字幕本身
+- **没有字幕轨** → 先报告原因，显式加 `--transcribe` 后才下载音轨并在本地转写（30 分钟视频约 10 分钟）
 - 全程本地处理，音频不上传任何第三方转写服务
 
 > 本项目的音频回退路线是「音频转写（ASR）」，即语音转成文字。它**不做跨语言翻译**，也**不使用截图 / 抽帧 / OCR**。
@@ -250,7 +250,7 @@ B 站发的 SESSDATA 有效期一般 **3 个月**左右（可在 DevTools 的 Ex
 .\.runtime\Scripts\python.exe scripts\digest.py '<链接>' --readable
 
 # 校验「只插标点、没动原文」：剥掉标点后必须逐字相等，差一个字都不放过
-.\.runtime\Scripts\python.exe scripts\check_punct.py outputs\<BV号>\transcript.txt outputs\<BV号>\transcript-readable-punct.txt
+.\.runtime\Scripts\python.exe scripts\check_punct.py outputs\<BV号>_p<分P号>\transcript.txt outputs\<BV号>_p<分P号>\transcript-readable-punct.txt
 
 # 换模型：small 更快更差，turbo 默认
 .\.runtime\Scripts\python.exe scripts\digest.py '<链接>' --model small
@@ -278,14 +278,18 @@ B 站发的 SESSDATA 有效期一般 **3 个月**左右（可在 DevTools 的 Ex
 
 只收**英文专名**，不要收中文同音错——中文误替换的风险大于收益，交给上下文判断更稳。
 
+术语表仅用于 ASR 的单独修订版 `transcript-corrected.txt`，逐段改动记录在 `transcript-corrections.json`。没有替换时不生成这两份文件。原生字幕不应用术语表；`transcript.txt` 始终保留原始字幕正文，Markdown 仅做简繁转换和分段。
+
+分 P 视频按 BV＋分 P 号隔离。`--reuse` 对标准 URL／裸 BV 只读取本地缓存，不检查登录、不联网；旧版 BV 目录只有元数据匹配时才复用，缓存不匹配则报错。短链接首次解析仍需联网，离线复用时请使用标准 URL／裸 BV。
+
 ### 输出文件
 
-每次运行在 `outputs/<BV号>/` 下生成：
+每次运行在 `outputs/<BV号>_p<分P号>/` 下生成：
 
 | 文件 | 内容 |
 |---|---|
 | `transcript.md` | **主产物**：标题 + 来源标记 + 分段正文（带 `[mm:ss]` 锚点） |
-| `transcript.txt` | 纯文本版，方便丢给别的工具 |
+| `transcript.txt` | 原始字幕正文，不做简繁转换或术语替换，供补标点逐字回校 |
 | `transcript-readable.md` | 加 `--readable` 才生成：段落 70 字，给人读的版本，不覆盖上面两份 |
 | `probe/subtitles.srt` | SRT，可给播放器 |
 | `probe/subtitles.json` | 每段文字 + 时间 + 置信度 |
@@ -471,3 +475,11 @@ ASR 结果恒标记 `review_required=true`，并按 `avg_logprob < -0.6` / `no_s
 ├─ THIRD-PARTY-NOTICES.md  第三方组件、许可证与致谢
 └─ agents/openai.yaml      agent 配置
 ```
+
+## 回归检查
+
+```powershell
+.\.runtime\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+测试使用合成字幕和网络替身，不读取真实账号凭据，也不下载模型。

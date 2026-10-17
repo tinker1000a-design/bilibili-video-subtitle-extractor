@@ -127,7 +127,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 .\.runtime\Scripts\python.exe scripts\digest.py '<视频链接>'
 ```
 
-一条命令：探测字幕轨 → 有则取、出稿 / 没有则**停下来报告原因** → 简繁统一 → 术语纠错 → 段落重组 → `outputs\<BV号>\transcript.md`（带 `[mm:ss]` 锚点）。
+一条命令：探测字幕轨 → 有则取、出稿 / 没有则**停下来报告原因** → 简繁统一展示 → 段落重组（原始 TXT 保留；ASR 术语修订另存） → `outputs\<BV号>_p<分P号>\transcript.md`（带 `[mm:ss]` 锚点）。
 
 **注意：默认不会自动转写。** 只有显式加 `--transcribe` 才会启动本地 ASR（首次下 1.6GB 模型）。
 这是刻意的——用户抱怨过「登录明明成功了，工具却执意去部署识别模型」。现在它必须先说清是哪种情况：
